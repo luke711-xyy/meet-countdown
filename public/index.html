@@ -64,7 +64,11 @@
     </aside>
 
     <aside class="edge-rail edge-rail-right" id="task-rail" aria-label="清单">
-      <div class="edge-capsules" id="task-capsules" aria-live="polite"></div>
+      <div class="task-board" id="task-capsules" aria-live="polite">
+        <section class="task-zone task-zone-theirs" aria-label="对方的任务"><div class="task-list" id="task-list-theirs"></div></section>
+        <div class="task-divider" aria-hidden="true"></div>
+        <section class="task-zone task-zone-mine" aria-label="我的任务"><div class="task-list" id="task-list-mine"></div></section>
+      </div>
       <form class="task-composer-capsule hidden" id="task-form">
         <input id="task-input" type="text" maxlength="120" placeholder="写下一件小事" aria-label="新任务" /><button type="submit" aria-label="添加任务">＋</button>
       </form>

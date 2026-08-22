@@ -64,7 +64,7 @@ button { cursor: pointer; }
 
 .background-wash {
   z-index: 1;
-  background: linear-gradient(180deg, oklch(0.05 0 0 / 0.18), oklch(0.05 0.02 220 / 0.54));
+  background: linear-gradient(180deg, oklch(0.05 0 0 / 0.08), oklch(0.05 0.02 220 / 0.34));
 }
 
 .app-shell {
@@ -165,23 +165,28 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .edge-orb-dot { width: 7px; height: 7px; border-radius: 50%; background: oklch(1 0 0 / 0.72); box-shadow: 0 0 0 4px oklch(1 0 0 / 0.09); }
 .edge-orb-ring { width: 16px; height: 16px; border: 1px solid oklch(1 0 0 / 0.78); border-radius: 50%; }
 .edge-count { position: absolute; top: 2px; right: 1px; min-width: 13px; color: var(--ink); font-size: 9px; font-variant-numeric: tabular-nums; }
-.edge-capsules { position: absolute; top: 50%; display: grid; gap: 10px; opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
+.edge-capsules { position: absolute; top: 50%; display: flex; width: min(330px, calc(100vw - 98px)); max-height: min(72svh, 620px); flex-direction: column; gap: 9px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: oklch(1 0 0 / 0.32) transparent; scrollbar-width: thin; opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
 .edge-rail-left .edge-capsules { left: 66px; transform: translateY(-50%); }
-.edge-rail-right .edge-capsules { right: 66px; transform: translateY(-50%); }
 .edge-rail.is-hovered .edge-capsules { opacity: 1; pointer-events: auto; }
-.voice-capsule, .task-capsule, .voice-recording-capsule, .task-composer-capsule { display: flex; align-items: center; min-height: 42px; border: 1px solid oklch(1 0 0 / 0.19); border-radius: 999px; color: var(--ink-soft); background: linear-gradient(135deg, oklch(1 0 0 / 0.14), oklch(1 0 0 / 0.055)); box-shadow: 0 7px 18px oklch(0 0 0 / 0.12), inset 0 1px 0 oklch(1 0 0 / 0.13); backdrop-filter: blur(16px) saturate(115%); -webkit-backdrop-filter: blur(16px) saturate(115%); }
-.voice-capsule { width: 158px; gap: 8px; padding: 7px 10px; transform: translateX(-3px); }
-.task-capsule { width: 54px; max-width: 260px; gap: 8px; overflow: hidden; padding: 7px 10px; transform: translateX(var(--card-offset, 0px)); transition: width 320ms var(--ease-out), transform 320ms var(--ease-out), background 180ms ease; }
-.edge-rail-right .task-capsule:hover { width: 250px; transform: translateX(0); background: linear-gradient(135deg, oklch(1 0 0 / 0.19), oklch(1 0 0 / 0.08)); }
-.task-capsule .task-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-capsule:hover .task-text { white-space: normal; }
-.task-capsule small { flex: 0 0 auto; color: var(--muted); font-size: 9px; }
+.edge-capsules::-webkit-scrollbar, .task-zone::-webkit-scrollbar { width: 4px; }
+.edge-capsules::-webkit-scrollbar-thumb, .task-zone::-webkit-scrollbar-thumb { border-radius: 999px; background: oklch(1 0 0 / 0.28); }
+.voice-capsule, .task-capsule, .voice-recording-capsule, .task-composer-capsule { display: flex; align-items: center; min-height: 42px; border: 1px solid oklch(1 0 0 / 0.19); border-radius: 999px; color: var(--ink-soft); background: linear-gradient(135deg, oklch(1 0 0 / 0.14), oklch(1 0 0 / 0.055)); box-shadow: 0 7px 8px oklch(0 0 0 / 0.12), inset 0 1px 0 oklch(1 0 0 / 0.13); backdrop-filter: blur(16px) saturate(115%); -webkit-backdrop-filter: blur(16px) saturate(115%); }
+.voice-capsule { width: min(184px, calc(100vw - 120px)); gap: 8px; padding: 7px 10px; }
+.voice-capsule.is-mine { align-self: flex-end; transform: translateX(-4px); }
+.voice-capsule.is-theirs { align-self: flex-start; transform: translateX(4px); }
+.task-board { position: absolute; top: 50%; right: 66px; display: grid; width: min(300px, calc(100vw - 98px)); height: min(72svh, 620px); grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; transform: translateY(-50%); opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
+.edge-rail.is-hovered .task-board { opacity: 1; pointer-events: auto; }
+.task-zone { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: oklch(1 0 0 / 0.32) transparent; scrollbar-width: thin; }
+.task-list { display: flex; width: 100%; min-height: 100%; flex-direction: column; align-items: flex-end; gap: 10px; padding: 4px 4px 4px 16px; }
+.task-divider { height: 1px; margin: 0 3px; background: oklch(1 0 0 / 0.66); }
+.task-capsule { width: fit-content; max-width: min(270px, 100%); gap: 8px; overflow-wrap: anywhere; padding: 9px 11px 9px 9px; transform: translateX(var(--card-offset, 0px)); transition: transform 220ms var(--ease-out), background 180ms ease; }
+.task-capsule:hover { transform: translateX(0); background: linear-gradient(135deg, oklch(1 0 0 / 0.19), oklch(1 0 0 / 0.08)); }
 .task-check, .voice-play { flex: 0 0 auto; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid oklch(1 0 0 / 0.45); border-radius: 50%; color: var(--ink-soft); background: transparent; font-size: 10px; line-height: 1; }
 .task-check[aria-pressed="true"] { border-color: oklch(1 0 0 / 0.7); background: oklch(1 0 0 / 0.56); box-shadow: inset 0 0 0 4px oklch(0.55 0.08 210 / 0.7); }
-.task-text { color: var(--ink-soft); font-size: 12px; line-height: 1.4; }
+.task-text { min-width: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.45; white-space: normal; }
 .task-text.is-completed { color: var(--muted); text-decoration: line-through; text-decoration-color: oklch(1 0 0 / 0.45); }
 .voice-play { font-size: 9px; }
-.voice-wave { flex: 1; height: 13px; opacity: 0.58; background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 5px); mask-image: linear-gradient(90deg, transparent, #000 13%, #000 87%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 13%, #000 87%, transparent); }
+.voice-wave { flex: 1; height: 2px; opacity: 0.58; border-radius: 999px; background: linear-gradient(90deg, transparent, currentColor 15%, currentColor 36%, oklch(1 0 0 / 0.36) 53%, currentColor 76%, transparent); }
 .voice-time { color: var(--muted); font-size: 9px; white-space: nowrap; }
 .voice-capsule audio { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .voice-recording-capsule { position: absolute; left: 66px; top: calc(50% + 34px); width: 158px; gap: 8px; padding: 7px 8px 7px 12px; opacity: 0; pointer-events: auto; transition: opacity 180ms ease; }
@@ -211,9 +216,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .settings-sheet { padding: 24px 20px 22px; }
   .edge-rail { width: 100vw; }
   .edge-rail-left .edge-capsules, .edge-rail-left .voice-recording-capsule { left: 54px; }
-  .edge-rail-right .edge-capsules, .edge-rail-right .task-composer-capsule { right: 54px; }
-  .task-capsule { width: 48px; }
-  .edge-rail-right .task-capsule:hover { width: min(250px, calc(100vw - 82px)); }
+  .edge-rail-right .task-board, .edge-rail-right .task-composer-capsule { right: 54px; }
+  .edge-capsules { width: min(300px, calc(100vw - 82px)); max-height: 70svh; }
+  .task-board { width: min(280px, calc(100vw - 82px)); height: min(72svh, 560px); }
+  .task-capsule { max-width: min(240px, 100%); }
 }
 
 @media (prefers-reduced-motion: reduce) {

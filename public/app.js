@@ -10,7 +10,7 @@ const elements = {
   blurRange: $('#blur-range'), blurOutput: $('#blur-output'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
   voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
-  taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), taskInput: $('#task-input'), taskCapsules: $('#task-capsules'),
+  taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
 };
 
 let state = null;
@@ -119,19 +119,21 @@ async function saveSettings(event) {
 }
 
 function makeTaskElement(task, index) {
-  const item = document.createElement('article'); item.className = 'task-capsule'; item.style.setProperty('--card-offset', `${(index % 3) * 6 - 6}px`);
+  const item = document.createElement('article'); item.className = 'task-capsule'; item.style.setProperty('--card-offset', `${(index % 3) * 4 - 4}px`);
   const checkbox = document.createElement('button'); checkbox.className = 'task-check'; checkbox.type = 'button'; checkbox.setAttribute('aria-label', task.completed ? '标记未完成' : '标记完成'); checkbox.setAttribute('aria-pressed', String(task.completed));
   checkbox.addEventListener('click', async () => { if (!roomId) return; try { await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: !task.completed }) }); } catch (error) { showToast(error.message); } });
   const text = document.createElement('span'); text.className = 'task-text'; text.textContent = task.text; if (task.completed) text.classList.add('is-completed');
-  const meta = document.createElement('small'); meta.textContent = task.authorId === memberId ? '我' : '对方'; item.append(checkbox, text, meta); return item;
+  item.append(checkbox, text); return item;
 }
 function renderTasks() {
-  const tasks = state?.tasks || []; elements.taskCapsules.replaceChildren(...tasks.map(makeTaskElement)); const incomplete = tasks.filter((task) => !task.completed).length;
+  const tasks = state?.tasks || []; const theirs = tasks.filter((task) => task.authorId !== memberId); const mine = tasks.filter((task) => task.authorId === memberId);
+  elements.taskListTheirs.replaceChildren(...theirs.map(makeTaskElement)); elements.taskListMine.replaceChildren(...mine.map((task, index) => makeTaskElement(task, index)));
+  const incomplete = tasks.filter((task) => !task.completed).length;
   elements.taskCount.textContent = incomplete ? String(incomplete) : '';
 }
 
 function makeVoiceElement(note) {
-  const item = document.createElement('article'); item.className = 'voice-capsule'; item.title = `${note.authorId === memberId ? '我' : '对方'} · ${formatShortTime(note.createdAt)}`;
+  const item = document.createElement('article'); item.className = `voice-capsule ${note.authorId === memberId ? 'is-mine' : 'is-theirs'}`; item.title = `${note.authorId === memberId ? '我' : '对方'} · ${formatShortTime(note.createdAt)}`;
   const play = document.createElement('button'); play.className = 'voice-play'; play.type = 'button'; play.textContent = '▶'; play.setAttribute('aria-label', '播放留言');
   const wave = document.createElement('span'); wave.className = 'voice-wave'; wave.setAttribute('aria-hidden', 'true');
   const time = document.createElement('time'); time.className = 'voice-time'; time.textContent = formatShortTime(note.createdAt);
