@@ -186,7 +186,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .task-text { min-width: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.45; white-space: normal; }
 .task-text.is-completed { color: var(--muted); text-decoration: line-through; text-decoration-color: oklch(1 0 0 / 0.45); }
 .voice-play { font-size: 9px; }
-.voice-wave { flex: 1; height: 2px; opacity: 0.58; border-radius: 999px; background: linear-gradient(90deg, transparent, currentColor 15%, currentColor 36%, oklch(1 0 0 / 0.36) 53%, currentColor 76%, transparent); }
+.voice-wave { display: flex; flex: 1; align-items: center; justify-content: center; height: 20px; gap: 2px; color: var(--ink-soft); opacity: 0.62; }
+.voice-bar { display: block; width: 2px; height: var(--bar-height); border-radius: 999px; background: currentColor; transform: scaleY(0.72); transform-origin: center; }
+.voice-capsule.is-playing .voice-bar { animation: voice-wave var(--bar-speed) ease-in-out infinite alternate; animation-delay: var(--bar-delay); }
 .voice-time { color: var(--muted); font-size: 9px; white-space: nowrap; }
 .voice-capsule audio { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .voice-recording-capsule { position: absolute; left: 66px; top: calc(50% + 34px); width: 158px; gap: 8px; padding: 7px 8px 7px 12px; opacity: 0; pointer-events: auto; transition: opacity 180ms ease; }
@@ -200,6 +202,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .task-composer-capsule input::placeholder { color: var(--muted); }
 .task-composer-capsule button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 50%; color: var(--ink-soft); background: oklch(1 0 0 / 0.09); font-size: 17px; line-height: 1; }
 @keyframes capsule-pulse { 0%, 100% { opacity: 0.62; transform: scale(0.86); } 50% { opacity: 1; transform: scale(1.1); } }
+@keyframes voice-wave { from { transform: scaleY(0.45); opacity: 0.56; } to { transform: scaleY(1.12); opacity: 1; } }
 
 @media (max-width: 640px) {
   .app-shell { padding: 20px 16px 20px; }

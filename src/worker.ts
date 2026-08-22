@@ -21,6 +21,31 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+async function listVoiceObjectKeys(env: Env) {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await env.MEDIA.list({ prefix: 'rooms/', cursor });
+    keys.push(...page.objects.map((object) => object.key).filter((key) => key.includes('/voice/')));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return keys;
+}
+
+async function clearEphemeralData(env: Env) {
+  const voiceObjectKeys = await listVoiceObjectKeys(env);
+  await Promise.all(voiceObjectKeys.map((key) => env.MEDIA.delete(key)));
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM voice_notes'),
+    env.DB.prepare('DELETE FROM tasks'),
+  ]);
+
+  const rooms = await env.DB.prepare('SELECT id FROM rooms').all<{ id: string }>();
+  const clearedAt = nowIso();
+  await Promise.all((rooms.results || []).map((room) => broadcast(env, room.id, 'ephemeral.cleared', { clearedAt })));
+  return { clearedAt, voiceObjects: voiceObjectKeys.length, rooms: rooms.results?.length || 0 };
+}
+
 function randomToken(length = 10) {
   const bytes = new Uint8Array(length);
   crypto.getRandomValues(bytes);
@@ -282,6 +307,9 @@ export default {
       console.error('request_failed', error);
       return json({ error: error instanceof Error ? error.message : '服务暂时不可用。' }, 500);
     }
+  },
+  async scheduled(_controller: ScheduledController, env: Env) {
+    await clearEphemeralData(env);
   },
 };
 

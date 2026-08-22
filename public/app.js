@@ -25,6 +25,9 @@ let recorder = null;
 let recorderChunks = [];
 let recorderStartedAt = 0;
 let recorderTimer = null;
+let activeAudio = null;
+let activeVoiceItem = null;
+let activeVoicePlay = null;
 let lastPointerSentAt = 0;
 let lastPointer = null;
 const water = new WaterBackground(elements.waterCanvas);
@@ -136,13 +139,37 @@ function makeVoiceElement(note) {
   const item = document.createElement('article'); item.className = `voice-capsule ${note.authorId === memberId ? 'is-mine' : 'is-theirs'}`; item.title = `${note.authorId === memberId ? '我' : '对方'} · ${formatShortTime(note.createdAt)}`;
   const play = document.createElement('button'); play.className = 'voice-play'; play.type = 'button'; play.textContent = '▶'; play.setAttribute('aria-label', '播放留言');
   const wave = document.createElement('span'); wave.className = 'voice-wave'; wave.setAttribute('aria-hidden', 'true');
+  for (let index = 0; index < 17; index += 1) {
+    const bar = document.createElement('i'); bar.className = 'voice-bar'; bar.style.setProperty('--bar-height', `${5 + ((index * 7) % 10)}px`); bar.style.setProperty('--bar-delay', `${(index % 6) * 55}ms`); bar.style.setProperty('--bar-speed', `${580 + (index % 4) * 90}ms`); wave.append(bar);
+  }
   const time = document.createElement('time'); time.className = 'voice-time'; time.textContent = formatShortTime(note.createdAt);
   const audio = document.createElement('audio'); audio.preload = 'metadata'; audio.src = note.url;
-  play.addEventListener('click', async () => { try { if (audio.paused) { await audio.play(); play.textContent = 'Ⅱ'; } else { audio.pause(); play.textContent = '▶'; } } catch { showToast('无法播放这条留言'); } });
-  audio.addEventListener('ended', () => { play.textContent = '▶'; });
+  const reset = () => { item.classList.remove('is-playing'); play.textContent = '▶'; if (activeAudio === audio) { activeAudio = null; activeVoiceItem = null; activeVoicePlay = null; } };
+  play.addEventListener('click', async () => {
+    try {
+      if (!audio.paused) { audio.pause(); audio.currentTime = 0; reset(); return; }
+      if (activeAudio && activeAudio !== audio) { activeAudio.pause(); activeAudio.currentTime = 0; activeVoiceItem?.classList.remove('is-playing'); if (activeVoicePlay) activeVoicePlay.textContent = '▶'; }
+      await audio.play(); activeAudio = audio; activeVoiceItem = item; activeVoicePlay = play; item.classList.add('is-playing'); play.textContent = 'Ⅱ';
+    } catch { showToast('无法播放这条留言'); }
+  });
+  audio.addEventListener('ended', reset); audio.addEventListener('pause', () => { if (activeAudio === audio && audio.currentTime >= audio.duration) reset(); });
   item.append(play, wave, time, audio); return item;
 }
-function renderVoiceNotes() { const notes = state?.voiceNotes || []; elements.voiceCapsules.replaceChildren(...notes.map(makeVoiceElement)); elements.voiceCount.textContent = notes.length ? String(notes.length) : ''; }
+function stopActiveVoice() { if (!activeAudio) return; activeAudio.pause(); activeAudio.currentTime = 0; activeVoiceItem?.classList.remove('is-playing'); if (activeVoicePlay) activeVoicePlay.textContent = '▶'; activeAudio = null; activeVoiceItem = null; activeVoicePlay = null; }
+function renderVoiceNotes() { stopActiveVoice(); const notes = state?.voiceNotes || []; elements.voiceCapsules.replaceChildren(...notes.map(makeVoiceElement)); elements.voiceCount.textContent = notes.length ? String(notes.length) : ''; }
+
+async function syncEphemeralState() {
+  if (!roomId || !state) return;
+  try {
+    const latest = await api('/api/state');
+    const tasksChanged = JSON.stringify(latest.tasks || []) !== JSON.stringify(state?.tasks || []);
+    const voicesChanged = JSON.stringify(latest.voiceNotes || []) !== JSON.stringify(state?.voiceNotes || []);
+    if (tasksChanged) { state.tasks = latest.tasks || []; renderTasks(); }
+    if (voicesChanged) { state.voiceNotes = latest.voiceNotes || []; renderVoiceNotes(); }
+  } catch {
+    // Realtime remains the primary path; the periodic readback only heals stale tabs.
+  }
+}
 
 function updateTaskFromEvent(task) { const item = state.tasks.find((candidate) => candidate.id === task.id); if (item) Object.assign(item, task); renderTasks(); }
 function applyRealtimeEvent(event) {
@@ -154,6 +181,7 @@ function applyRealtimeEvent(event) {
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);
   else if (event.type === 'task.deleted') { state.tasks = state.tasks.filter((task) => task.id !== payload.id); renderTasks(); }
   else if (event.type === 'voice.created') { state.voiceNotes = [payload, ...(state.voiceNotes || []).filter((note) => note.id !== payload.id)]; renderVoiceNotes(); }
+  else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; renderTasks(); renderVoiceNotes(); }
 }
 
 function connectRealtime() {
@@ -214,4 +242,4 @@ window.addEventListener('pointermove', (event) => {
 window.addEventListener('pointerdown', (event) => water.addRipple(event.clientX / window.innerWidth, event.clientY / window.innerHeight, 0.12), { passive: true });
 
 await initHtmlCanvasBridge(); await water.init();
-const room = await ensureRoom(); if (!room) document.body.dataset.cloudReady = 'false'; await loadState(); render(); setInterval(render, 250);
+const room = await ensureRoom(); if (!room) document.body.dataset.cloudReady = 'false'; await loadState(); render(); setInterval(render, 250); setInterval(syncEphemeralState, 30000);
