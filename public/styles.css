@@ -178,7 +178,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .edge-rail.is-hovered .task-board { opacity: 1; pointer-events: auto; }
 .task-zone { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: oklch(1 0 0 / 0.32) transparent; scrollbar-width: thin; }
 .task-list { display: flex; width: 100%; min-height: 100%; flex-direction: column; align-items: flex-end; gap: 10px; padding: 4px 4px 4px 16px; }
-.task-divider { justify-self: end; width: calc(100% - 16px); height: 1px; margin: 0; background: oklch(1 0 0 / 0.66); }
+.task-divider { justify-self: end; width: calc(100% - 16px); height: 1px; margin: 0; background: linear-gradient(90deg, transparent 0%, oklch(1 0 0 / 0.08) 14%, oklch(1 0 0 / 0.66) 30%, oklch(1 0 0 / 0.66) 70%, oklch(1 0 0 / 0.08) 86%, transparent 100%); }
 .task-capsule { width: calc(100% - 26px); max-width: none; min-width: 0; gap: 8px; overflow-wrap: anywhere; padding: 9px 11px 9px 9px; transform: none; transition: background 180ms ease; }
 .task-capsule:hover { background: linear-gradient(135deg, oklch(1 0 0 / 0.19), oklch(1 0 0 / 0.08)); }
 .task-check, .voice-play { flex: 0 0 auto; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid oklch(1 0 0 / 0.45); border-radius: 50%; color: var(--ink-soft); background: transparent; font-size: 10px; line-height: 1; }
@@ -197,8 +197,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .voice-recording-capsule span:nth-child(2) { flex: 1; color: var(--ink-soft); font-variant-numeric: tabular-nums; font-size: 11px; }
 .capsule-stop, .capsule-cancel { padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-soft); background: oklch(1 0 0 / 0.09); font-size: 10px; white-space: nowrap; }
 .capsule-cancel { color: var(--muted); background: transparent; }
-.task-composer-capsule { position: absolute; right: 66px; top: calc(50% + 34px); width: 226px; gap: 6px; padding: 5px 6px 5px 13px; opacity: 0; pointer-events: auto; transition: opacity 180ms ease, transform 260ms var(--ease-out); transform: translateX(10px); }
-.edge-rail.is-composer-active .task-composer-capsule { opacity: 1; transform: translateX(0); }
+.task-composer-capsule { position: absolute; right: 78px; top: 50%; width: 226px; gap: 6px; padding: 5px 6px 5px 13px; opacity: 0; pointer-events: auto; transition: opacity 180ms ease, transform 260ms var(--ease-out); transform: translate(10px, -50%); }
+.edge-rail.is-composer-active .task-composer-capsule { opacity: 1; transform: translate(0, -50%); }
 .task-composer-capsule input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 11px; }
 .task-composer-capsule input::placeholder { color: var(--muted); }
 .task-composer-capsule button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 50%; color: var(--ink-soft); background: oklch(1 0 0 / 0.09); font-size: 17px; line-height: 1; }
@@ -221,7 +221,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .settings-sheet { padding: 24px 20px 22px; }
   .edge-rail { width: 100vw; }
   .edge-rail-left .edge-capsules, .edge-rail-left .voice-recording-capsule { left: 54px; }
-  .edge-rail-right .task-board, .edge-rail-right .task-composer-capsule { right: 54px; }
+  .edge-rail-right .task-board { right: 54px; }
+  .edge-rail-right .task-composer-capsule { right: 66px; }
   .edge-capsules { width: min(300px, calc(100vw - 82px)); max-height: 70svh; }
   .task-board { width: min(220px, calc(100vw - 82px)); height: min(72svh, 560px); }
 }
