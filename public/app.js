@@ -3,6 +3,7 @@ import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
+  authGate: $('#auth-gate'), authIntro: $('#auth-intro'), authForm: $('#auth-form'), authUsername: $('#auth-username'), authPassword: $('#auth-password'), authStatus: $('#auth-status'), authSubmit: $('#auth-submit'), loginTab: $('#login-tab'), registerTab: $('#register-tab'), roomGate: $('#room-gate'), roomGateMessage: $('#room-gate-message'), createRoomButton: $('#create-room-button'), accountName: $('#account-name'),
   background: $('.background-layer'), waterCanvas: $('#water-canvas'), targetSummary: $('#target-summary'),
   days: $('#days'), hours: $('#hours'), minutes: $('#minutes'), seconds: $('#seconds'), currentTime: $('#current-time'),
   timezoneLabel: $('#timezone-label'), dialog: $('#settings-dialog'), form: $('#settings-form'), targetAt: $('#target-at'),
@@ -11,12 +12,15 @@ const elements = {
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
   voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), cancelVoice: $('#cancel-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
   taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), cancelTask: $('#cancel-task'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
+  inviteUrl: $('#invite-url'), copyInvite: $('#copy-invite'), roomMembers: $('#room-members'), destroyRoom: $('#destroy-room'), logoutButton: $('#logout-button'),
   contextMenu: $('#context-menu'), contextDelete: $('#context-delete'),
 };
 
 let state = null;
 let roomId = null;
 let memberId = null;
+let currentUser = null;
+let authMode = 'login';
 let selectedBackground = null;
 let selectedBackgroundFile = null;
 let backgroundSelection = 'unchanged';
@@ -99,15 +103,39 @@ async function deleteContextTarget() {
   } catch (error) { showToast(error.message); }
 }
 
+function setAuthMode(mode) {
+  authMode = mode;
+  const register = mode === 'register';
+  elements.loginTab.classList.toggle('is-active', !register); elements.registerTab.classList.toggle('is-active', register);
+  elements.loginTab.setAttribute('aria-selected', String(!register)); elements.registerTab.setAttribute('aria-selected', String(register));
+  elements.authSubmit.textContent = register ? '创建账号' : '登录'; elements.authPassword.autocomplete = register ? 'new-password' : 'current-password';
+  elements.authStatus.textContent = '';
+}
+
+async function refreshAuth() {
+  try {
+    const response = await fetch('/api/auth/me', { cache: 'no-store' });
+    if (!response.ok) return null;
+    const result = await response.json(); currentUser = result.user; memberId = currentUser.id; elements.accountName.textContent = currentUser.username; elements.authGate.classList.add('hidden');
+    return currentUser;
+  } catch { return null; }
+}
+
+function showRoomGate(message) {
+  elements.roomGateMessage.textContent = message; elements.roomGate.classList.remove('hidden');
+}
+function hideRoomGate() { elements.roomGate.classList.add('hidden'); }
+
 async function ensureRoom() {
   const queryRoom = new URLSearchParams(location.search).get('room');
   try {
     const response = await fetch('/api/room', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryRoom ? { roomId: queryRoom } : {}) });
-    if (!response.ok) return null;
-    const result = await response.json(); roomId = result.roomId; memberId = result.memberId;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { showRoomGate(result.error || '暂时无法进入这个房间。'); return null; }
+    roomId = result.roomId; memberId = result.memberId;
     if (!queryRoom) history.replaceState(null, '', `/?room=${encodeURIComponent(roomId)}`);
-    document.body.dataset.cloudReady = 'true'; return result;
-  } catch { return null; }
+    document.body.dataset.cloudReady = 'true'; hideRoomGate(); return result;
+  } catch { showRoomGate('网络连接暂时不可用，请稍后再试。'); return null; }
 }
 
 function apiUrl(path) { const url = new URL(path, location.origin); if (roomId) url.searchParams.set('room', roomId); return url; }
@@ -119,7 +147,7 @@ async function api(path, options = {}) {
 
 async function loadState() {
   try {
-    state = await api('/api/state'); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间';
+    state = await api('/api/state'); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
     renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
   } catch (error) { elements.targetSummary.textContent = '请确认后端服务正在运行'; console.error(error); }
 }
@@ -128,7 +156,7 @@ function openSettings() {
   if (!state) return;
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels();
   selectedBackground = currentBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
-  elements.fileName.textContent = selectedBackground ? '已选择照片' : '默认背景'; elements.removeBackground.classList.toggle('hidden', !selectedBackground);
+  elements.fileName.textContent = selectedBackground ? '已选择照片' : '默认背景'; elements.removeBackground.classList.toggle('hidden', !selectedBackground); elements.inviteUrl.value = state.inviteUrl || `${location.origin}/?room=${encodeURIComponent(roomId || '')}`; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
   elements.dialog.classList.remove('hidden'); elements.dialog.setAttribute('aria-hidden', 'false');
 }
 function closeSettings() { elements.dialog.classList.add('hidden'); elements.dialog.setAttribute('aria-hidden', 'true'); }
@@ -220,6 +248,8 @@ function applyRealtimeEvent(event) {
   else if (event.type === 'task.deleted') { state.tasks = state.tasks.filter((task) => task.id !== payload.id); renderTasks(); }
   else if (event.type === 'voice.created') { state.voiceNotes = [payload, ...(state.voiceNotes || []).filter((note) => note.id !== payload.id)]; renderVoiceNotes(); }
   else if (event.type === 'voice.deleted') { state.voiceNotes = (state.voiceNotes || []).filter((note) => note.id !== payload.id); renderVoiceNotes(); }
+  else if (event.type === 'room.joined') { state.members = [...(state.members || []).filter((member) => member.id !== payload.userId), { id: payload.userId, username: payload.username, slot: payload.slot }].sort((a, b) => a.slot - b.slot); elements.roomMembers.textContent = `${state.members.length} / 2`; showToast(`${payload.username || '对方'} 已加入房间`); }
+  else if (event.type === 'room.destroyed') { state = null; socket?.close(); socket = null; showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
   else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; renderTasks(); renderVoiceNotes(); }
 }
 
@@ -286,6 +316,40 @@ function setRailHover(rail, hovered) {
   if (rail === elements.taskRail && elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer();
 }
 
+async function bootApp() {
+  const user = await refreshAuth();
+  if (!user) {
+    elements.authGate.classList.remove('hidden');
+    if (new URLSearchParams(location.search).has('room')) elements.authIntro.textContent = '登录后即可加入对方发来的邀请房间。';
+    return;
+  }
+  const room = await ensureRoom();
+  if (!room) return;
+  await loadState(); render();
+}
+
+async function submitAuth(event) {
+  event.preventDefault(); elements.authSubmit.disabled = true; elements.authStatus.textContent = '正在处理…';
+  try {
+    const response = await fetch(`/api/auth/${authMode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: elements.authUsername.value.trim(), password: elements.authPassword.value }) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || '暂时无法完成操作。');
+    elements.authPassword.value = ''; elements.authStatus.textContent = ''; await bootApp();
+  } catch (error) { elements.authStatus.textContent = error.message; } finally { elements.authSubmit.disabled = false; }
+}
+
+async function destroyCurrentRoom() {
+  if (!roomId || !window.confirm('退出后，这个房间和其中的任务、录音会立即销毁，另一方也会被通知。继续吗？')) return;
+  elements.destroyRoom.disabled = true;
+  try {
+    await api('/api/room', { method: 'DELETE' }); socket?.close(); socket = null; roomId = null; state = null; history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); closeSettings();
+  } catch (error) { showToast(error.message); } finally { elements.destroyRoom.disabled = false; }
+}
+
+async function logout() {
+  await fetch('/api/auth/logout', { method: 'POST' }); socket?.close(); socket = null; currentUser = null; memberId = null; location.href = '/';
+}
+
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
 elements.contrastRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
 elements.brightnessRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
@@ -294,6 +358,10 @@ elements.removeBackground.addEventListener('click', () => { selectedBackground =
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
 elements.dialog.addEventListener('click', (event) => { if (event.target === elements.dialog) closeSettings(); }); elements.voiceOrb.addEventListener('click', startRecording); elements.taskOrb.addEventListener('click', openTaskComposer);
 elements.cancelVoice.addEventListener('click', cancelRecording); elements.stopVoice.addEventListener('click', stopRecording); elements.cancelTask.addEventListener('click', cancelTaskComposer);
+elements.loginTab.addEventListener('click', () => setAuthMode('login')); elements.registerTab.addEventListener('click', () => setAuthMode('register')); elements.authForm.addEventListener('submit', submitAuth);
+elements.copyInvite.addEventListener('click', async () => { try { await navigator.clipboard.writeText(elements.inviteUrl.value); showToast('邀请链接已复制'); } catch { elements.inviteUrl.select(); showToast('请手动复制邀请链接'); } });
+elements.destroyRoom.addEventListener('click', destroyCurrentRoom); elements.logoutButton.addEventListener('click', logout);
+elements.createRoomButton.addEventListener('click', async () => { history.replaceState(null, '', '/'); const room = await ensureRoom(); if (room) await loadState(); });
 elements.contextDelete.addEventListener('click', deleteContextTarget);
 elements.taskComposer.addEventListener('submit', async (event) => { event.preventDefault(); const text = elements.taskInput.value.trim(); if (!text || !roomId) return; try { await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); elements.taskInput.value = ''; closeTaskComposer(); } catch (error) { showToast(error.message); } });
 elements.voiceRail.addEventListener('pointerleave', cancelRecording); elements.taskRail.addEventListener('pointerleave', cancelTaskComposer);
@@ -309,4 +377,4 @@ window.addEventListener('pointermove', (event) => {
 window.addEventListener('pointerdown', (event) => water.addRipple(event.clientX / window.innerWidth, event.clientY / window.innerHeight, 0.12), { passive: true });
 
 await initHtmlCanvasBridge(); await water.init();
-const room = await ensureRoom(); if (!room) document.body.dataset.cloudReady = 'false'; await loadState(); render(); setInterval(render, 250); setInterval(syncEphemeralState, 30000);
+await bootApp(); setInterval(render, 250); setInterval(syncEphemeralState, 30000);

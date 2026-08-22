@@ -9,6 +9,36 @@
     <link rel="stylesheet" href="/styles.css?v=4" />
   </head>
   <body>
+    <section class="auth-gate" id="auth-gate" aria-labelledby="auth-title">
+      <div class="auth-sheet glass-panel">
+        <span class="brand-mark" aria-hidden="true">⌁</span>
+        <p class="section-kicker">MEET COUNTDOWN</p>
+        <h1 id="auth-title">把这段等待，留给你们两个人</h1>
+        <p class="auth-intro" id="auth-intro">登录后创建或加入一个只属于两个人的房间。</p>
+        <div class="auth-tabs" role="tablist" aria-label="账号操作">
+          <button class="auth-tab is-active" id="login-tab" type="button" role="tab" aria-selected="true">登录</button>
+          <button class="auth-tab" id="register-tab" type="button" role="tab" aria-selected="false">注册</button>
+        </div>
+        <form id="auth-form">
+          <label class="sr-only" for="auth-username">账号名称</label>
+          <input id="auth-username" type="text" autocomplete="username" placeholder="账号名称" maxlength="24" required />
+          <label class="sr-only" for="auth-password">密码</label>
+          <input id="auth-password" type="password" autocomplete="current-password" placeholder="密码（至少 8 位）" minlength="8" maxlength="72" required />
+          <p class="auth-status" id="auth-status" role="status"></p>
+          <button class="primary-button auth-submit" id="auth-submit" type="submit">登录</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="room-gate hidden" id="room-gate" aria-labelledby="room-gate-title">
+      <div class="room-gate-sheet glass-panel">
+        <p class="section-kicker">ROOM</p>
+        <h1 id="room-gate-title">还没有进入房间</h1>
+        <p id="room-gate-message">创建一个新房间，或者打开对方发来的邀请链接。</p>
+        <button class="primary-button" id="create-room-button" type="button">创建新房间</button>
+      </div>
+    </section>
+
     <div class="background-layer" aria-hidden="true"></div>
     <canvas class="water-canvas" id="water-canvas" aria-hidden="true"></canvas>
     <div class="background-wash" aria-hidden="true"></div>
@@ -22,9 +52,9 @@
             <p class="brand-name">见面倒计时</p>
           </div>
         </div>
-        <button class="icon-button" id="open-settings" type="button" aria-label="打开设置" title="设置">
+        <div class="topbar-actions"><span class="account-name" id="account-name"></span><button class="icon-button" id="open-settings" type="button" aria-label="打开设置" title="设置">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
+        </button></div>
       </header>
 
       <section class="hero" aria-labelledby="countdown-heading">
@@ -121,6 +151,13 @@
           <div class="range-labels"><span>较暗</span><span>较亮</span></div>
         </div>
 
+        <div class="room-settings">
+          <div class="label-row"><label for="invite-url">房间邀请</label><span id="room-members">1 / 2</span></div>
+          <div class="invite-row"><input id="invite-url" type="text" readonly aria-label="房间邀请链接" /><button class="text-button" id="copy-invite" type="button">复制</button></div>
+          <button class="text-button danger-button" id="destroy-room" type="button">退出并销毁房间</button>
+          <button class="text-button" id="logout-button" type="button">退出登录</button>
+        </div>
+
         <div class="dialog-actions">
           <p class="save-status" id="save-status" role="status"></p>
           <button class="primary-button" id="save-settings" value="default" type="submit">保存设置</button>
@@ -132,6 +169,6 @@
     <div class="context-menu hidden" id="context-menu" role="menu">
       <button id="context-delete" type="button" role="menuitem">删除</button>
     </div>
-    <script type="module" src="/app.js?v=4"></script>
+    <script type="module" src="/app.js?v=5"></script>
   </body>
 </html>

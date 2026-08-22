@@ -13,9 +13,17 @@ type RoomEvent = {
   createdAt: string;
 };
 
+type AuthUser = {
+  id: string;
+  username: string;
+};
+
 const ROOM_PATTERN = /^room_[a-z0-9]{10}$/;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
+const AUTH_COOKIE = 'meet_auth';
+const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
+const PASSWORD_ITERATIONS = 100_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -65,15 +73,57 @@ function cookie(request: Request, name: string) {
   return value ? decodeURIComponent(value.slice(name.length + 1)) : null;
 }
 
-function sessionId(request: Request) {
-  return cookie(request, 'meet_session') || `member_${randomToken(16)}`;
+function base64(bytes: ArrayBuffer | Uint8Array) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let binary = '';
+  for (const byte of view) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
-function withSession(response: Response, request: Request, memberId: string) {
-  if (cookie(request, 'meet_session')) return response;
+function fromBase64(value: string) {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - (value.length % 4)) % 4);
+  const binary = atob(normalized);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function sha256(value: string) {
+  return base64(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
+}
+
+async function hashPassword(password: string, salt: Uint8Array) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: PASSWORD_ITERATIONS, hash: 'SHA-256' }, key, 256);
+  return base64(bits);
+}
+
+async function verifyPassword(password: string, saltBase64: string, expectedHash: string) {
+  return (await hashPassword(password, fromBase64(saltBase64))) === expectedHash;
+}
+
+async function authenticatedUser(request: Request, env: Env) {
+  const token = cookie(request, AUTH_COOKIE);
+  if (!token) return null;
+  const tokenHash = await sha256(token);
+  const result = await env.DB.prepare(`
+    SELECT users.id, users.username
+    FROM auth_sessions
+    JOIN users ON users.id = auth_sessions.user_id
+    WHERE auth_sessions.token_hash = ?1 AND auth_sessions.expires_at > ?2
+  `).bind(tokenHash, nowIso()).first<AuthUser>();
+  return result || null;
+}
+
+function withAuthCookie(response: Response, request: Request, token: string) {
   const headers = new Headers(response.headers);
   const secure = new URL(request.url).protocol === 'https:' ? ' Secure;' : '';
-  headers.append('Set-Cookie', `meet_session=${encodeURIComponent(memberId)}; Path=/; HttpOnly; SameSite=Lax;${secure} Max-Age=31536000`);
+  headers.append('Set-Cookie', `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax;${secure} Max-Age=${SESSION_MAX_AGE}`);
+  return new Response(response.body, { status: response.status, headers });
+}
+
+function clearAuthCookie(response: Response, request: Request) {
+  const headers = new Headers(response.headers);
+  const secure = new URL(request.url).protocol === 'https:' ? ' Secure;' : '';
+  headers.append('Set-Cookie', `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax;${secure} Max-Age=0`);
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -91,23 +141,91 @@ async function bodyJson<T>(request: Request): Promise<T> {
   }
 }
 
-async function ensureRoom(env: Env, roomId: string) {
+async function createAuthSession(env: Env, request: Request, userId: string) {
+  const token = base64(crypto.getRandomValues(new Uint8Array(32)));
+  const timestamp = nowIso();
+  const expiresAt = new Date(Date.now() + SESSION_MAX_AGE * 1000).toISOString();
+  await env.DB.prepare('INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)')
+    .bind(await sha256(token), userId, timestamp, expiresAt).run();
+  return token;
+}
+
+function validUsername(value: string) {
+  return /^[\p{L}\p{N}_-]{2,24}$/u.test(value);
+}
+
+async function handleAuth(request: Request, env: Env, action: 'register' | 'login' | 'logout' | 'me') {
+  if (action === 'me') {
+    const user = await authenticatedUser(request, env);
+    return user ? json({ user }) : json({ error: '请先登录。' }, 401);
+  }
+  if (action === 'logout') {
+    const token = cookie(request, AUTH_COOKIE);
+    if (token) await env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash = ?1').bind(await sha256(token)).run();
+    return clearAuthCookie(json({ ok: true }), request);
+  }
+
+  const input = await bodyJson<{ username?: string; password?: string }>(request);
+  const username = String(input.username || '').trim();
+  const password = String(input.password || '');
+  if (!validUsername(username)) return json({ error: '账号名称需为 2 到 24 个字，可使用中文、字母、数字、下划线或短横线。' }, 400);
+  if (password.length < 8 || password.length > 72) return json({ error: '密码需为 8 到 72 个字符。' }, 400);
+
+  if (action === 'register') {
+    const id = `user_${crypto.randomUUID()}`;
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const timestamp = nowIso();
+    try {
+      await env.DB.prepare(`
+        INSERT INTO users (id, username, password_salt, password_hash, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+      `).bind(id, username, base64(salt), await hashPassword(password, salt), timestamp).run();
+    } catch (error) {
+      if (String(error).toLowerCase().includes('unique')) return json({ error: '这个账号名称已经被使用。' }, 409);
+      throw error;
+    }
+    const token = await createAuthSession(env, request, id);
+    return withAuthCookie(json({ user: { id, username } }, 201), request, token);
+  }
+
+  const user = await env.DB.prepare('SELECT id, username, password_salt AS passwordSalt, password_hash AS passwordHash FROM users WHERE username = ?1')
+    .bind(username).first<{ id: string; username: string; passwordSalt: string; passwordHash: string }>();
+  if (!user || !(await verifyPassword(password, user.passwordSalt, user.passwordHash))) return json({ error: '账号名称或密码不正确。' }, 401);
+  const token = await createAuthSession(env, request, user.id);
+  return withAuthCookie(json({ user: { id: user.id, username: user.username } }), request, token);
+}
+
+async function roomMember(env: Env, roomId: string, userId: string) {
+  return env.DB.prepare(`
+    SELECT room_members.room_id AS roomId, room_members.slot, users.id AS userId, users.username
+    FROM room_members JOIN users ON users.id = room_members.user_id
+    WHERE room_members.room_id = ?1 AND room_members.user_id = ?2
+  `).bind(roomId, userId).first<{ roomId: string; slot: number; userId: string; username: string }>();
+}
+
+async function ensureRoom(env: Env, roomId: string, user: AuthUser) {
   const existing = await env.DB.prepare('SELECT id FROM rooms WHERE id = ?1').bind(roomId).first();
   if (existing) return;
   const timestamp = nowIso();
   const targetAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  await env.DB.prepare(`
-    INSERT INTO rooms (id, target_at, blur_px, background_key, created_at, updated_at)
-    VALUES (?1, ?2, 0, NULL, ?3, ?3)
-  `).bind(roomId, targetAt, timestamp).run();
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO rooms (id, target_at, blur_px, background_key, created_at, updated_at)
+      VALUES (?1, ?2, 0, NULL, ?3, ?3)
+    `).bind(roomId, targetAt, timestamp),
+    env.DB.prepare('INSERT INTO room_members (room_id, user_id, slot, joined_at) VALUES (?1, ?2, 0, ?3)').bind(roomId, user.id, timestamp),
+  ]);
 }
 
-async function roomState(env: Env, request: Request, roomId: string, memberId: string) {
+async function roomState(env: Env, request: Request, roomId: string, user: AuthUser) {
   const room = await env.DB.prepare(`
     SELECT id, target_at AS targetAt, blur_px AS blurPx, contrast, brightness, background_key AS backgroundKey, updated_at AS updatedAt
     FROM rooms WHERE id = ?1
   `).bind(roomId).first<{ id: string; targetAt: string; blurPx: number; contrast: number; brightness: number; backgroundKey: string | null; updatedAt: string }>();
   if (!room) return null;
+
+  const membership = await roomMember(env, roomId, user.id);
+  if (!membership) return null;
 
   const tasksResult = await env.DB.prepare(`
     SELECT id, text, completed, author_id AS authorId, completed_by AS completedBy, created_at AS createdAt, updated_at AS updatedAt
@@ -116,6 +234,11 @@ async function roomState(env: Env, request: Request, roomId: string, memberId: s
   const voiceResult = await env.DB.prepare(`
     SELECT id, author_id AS authorId, mime_type AS mimeType, duration_ms AS durationMs, created_at AS createdAt
     FROM voice_notes WHERE room_id = ?1 ORDER BY created_at DESC LIMIT 40
+  `).bind(roomId).all();
+  const membersResult = await env.DB.prepare(`
+    SELECT users.id AS id, users.username AS username, room_members.slot AS slot
+    FROM room_members JOIN users ON users.id = room_members.user_id
+    WHERE room_members.room_id = ?1 ORDER BY room_members.slot ASC
   `).bind(roomId).all();
 
   return {
@@ -127,16 +250,19 @@ async function roomState(env: Env, request: Request, roomId: string, memberId: s
     backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}` : null,
     updatedAt: room.updatedAt,
     timeZone: 'Asia/Singapore',
-    memberId,
+    memberId: user.id,
+    username: user.username,
+    inviteUrl: `${new URL(request.url).origin}/?room=${encodeURIComponent(roomId)}`,
+    members: membersResult.results || [],
     tasks: (tasksResult.results || []).map((task) => ({
       ...task,
       completed: Boolean(task.completed),
-      mine: task.authorId === memberId,
+      mine: task.authorId === user.id,
     })),
     voiceNotes: (voiceResult.results || []).map((note) => ({
       ...note,
       url: `/api/voice/${encodeURIComponent(String(note.id))}?room=${encodeURIComponent(roomId)}`,
-      mine: note.authorId === memberId,
+      mine: note.authorId === user.id,
     })),
   };
 }
@@ -146,21 +272,56 @@ async function broadcast(env: Env, roomId: string, type: string, payload: unknow
   await stub.broadcast({ type, payload, createdAt: nowIso() });
 }
 
-async function handleRoom(request: Request, env: Env) {
+async function handleRoom(request: Request, env: Env, user: AuthUser) {
   const input = await bodyJson<{ roomId?: string }>(request);
   const roomId = input.roomId || `room_${randomToken(10)}`;
   if (!ROOM_PATTERN.test(roomId)) return json({ error: '房间链接无效。' }, 400);
   if (input.roomId) {
     const room = await env.DB.prepare('SELECT id FROM rooms WHERE id = ?1').bind(roomId).first();
     if (!room) return json({ error: '房间不存在。' }, 404);
+    if (!(await roomMember(env, roomId, user.id))) {
+      const slots = await env.DB.prepare('SELECT slot FROM room_members WHERE room_id = ?1 ORDER BY slot ASC').bind(roomId).all<{ slot: number }>();
+      const usedSlots = new Set((slots.results || []).map((item) => item.slot));
+      const slot = usedSlots.has(0) ? (usedSlots.has(1) ? null : 1) : 0;
+      if (slot === null) return json({ error: '这个房间已经有两位成员，暂时无法加入。' }, 409);
+      try {
+        await env.DB.prepare('INSERT INTO room_members (room_id, user_id, slot, joined_at) VALUES (?1, ?2, ?3, ?4)')
+          .bind(roomId, user.id, slot, nowIso()).run();
+      } catch (error) {
+        if (String(error).toLowerCase().includes('unique')) return json({ error: '房间刚刚被另一位成员加入，请重新打开邀请链接。' }, 409);
+        throw error;
+      }
+      await broadcast(env, roomId, 'room.joined', { userId: user.id, username: user.username, slot });
+    }
   } else {
-    await ensureRoom(env, roomId);
+    await ensureRoom(env, roomId, user);
   }
-  const memberId = sessionId(request);
-  return withSession(json({ roomId, memberId, inviteUrl: `${new URL(request.url).origin}/?room=${roomId}` }), request, memberId);
+  const state = await roomState(env, request, roomId, user);
+  return json({ roomId, memberId: user.id, inviteUrl: state?.inviteUrl, members: state?.members || [] });
 }
 
-async function handleSettings(request: Request, env: Env, roomId: string, memberId: string) {
+async function destroyRoom(env: Env, roomId: string, user: AuthUser) {
+  const membership = await roomMember(env, roomId, user.id);
+  if (!membership) return json({ error: '你不是这个房间的成员。' }, 403);
+  const room = await env.DB.prepare('SELECT id FROM rooms WHERE id = ?1').bind(roomId).first();
+  if (!room) return json({ error: '房间不存在。' }, 404);
+
+  await broadcast(env, roomId, 'room.destroyed', { actorId: user.id, actorName: user.username });
+  const voiceObjects = await env.MEDIA.list({ prefix: `rooms/${roomId}/voice/` });
+  await Promise.all([
+    env.MEDIA.delete(`rooms/${roomId}/background`),
+    ...voiceObjects.objects.map((object) => env.MEDIA.delete(object.key)),
+  ]);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM voice_notes WHERE room_id = ?1').bind(roomId),
+    env.DB.prepare('DELETE FROM tasks WHERE room_id = ?1').bind(roomId),
+    env.DB.prepare('DELETE FROM room_members WHERE room_id = ?1').bind(roomId),
+    env.DB.prepare('DELETE FROM rooms WHERE id = ?1').bind(roomId),
+  ]);
+  return json({ ok: true, roomId });
+}
+
+async function handleSettings(request: Request, env: Env, roomId: string, user: AuthUser) {
   const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number }>(request);
   const targetAt = new Date(input.targetAt || '');
   const blurPx = Number(input.blurPx);
@@ -173,8 +334,8 @@ async function handleSettings(request: Request, env: Env, roomId: string, member
   const updatedAt = nowIso();
   await env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, updated_at = ?5 WHERE id = ?6')
     .bind(targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, roomId).run();
-  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, actorId: memberId });
-  return json(await roomState(env, request, roomId, memberId));
+  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, actorId: user.id });
+  return json(await roomState(env, request, roomId, user));
 }
 
 function safeImageType(contentType: string | null) {
@@ -290,30 +451,42 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/api/health') return json({ ok: true, service: 'meet-countdown', serverNow: nowIso() });
-      if (url.pathname === '/api/room' && request.method === 'POST') return handleRoom(request, env);
+      if (url.pathname === '/api/auth/register' && request.method === 'POST') return handleAuth(request, env, 'register');
+      if (url.pathname === '/api/auth/login' && request.method === 'POST') return handleAuth(request, env, 'login');
+      if (url.pathname === '/api/auth/logout' && request.method === 'POST') return handleAuth(request, env, 'logout');
+      if (url.pathname === '/api/auth/me' && request.method === 'GET') return handleAuth(request, env, 'me');
+
+      const user = await authenticatedUser(request, env);
+      if (url.pathname === '/api/room' && request.method === 'POST') {
+        if (!user) return json({ error: '请先登录。' }, 401);
+        return handleRoom(request, env, user);
+      }
 
       const roomId = requestedRoom(request);
       if (url.pathname === '/ws') {
         if (!roomId) return new Response('Missing room', { status: 400 });
+        if (!user || !(await roomMember(env, roomId, user.id))) return new Response('Unauthorized', { status: 401 });
         const stub = env.COUPLE_ROOM.getByName(roomId);
-        return stub.fetch(request);
+        const headers = new Headers(request.headers);
+        headers.set('X-Member-Id', user.id);
+        return stub.fetch(new Request(request, { headers }));
       }
       if (url.pathname === '/api/state' && request.method === 'GET') {
         if (!roomId) return json({ error: 'Missing room' }, 400);
-        const memberId = sessionId(request);
-        const state = await roomState(env, request, roomId, memberId);
+        if (!user) return json({ error: '请先登录。' }, 401);
+        const state = await roomState(env, request, roomId, user);
         if (!state) return json({ error: '房间不存在。' }, 404);
-        return withSession(json(state), request, memberId);
+        return json(state);
       }
       if (!roomId) return env.ASSETS.fetch(request);
-      const memberId = sessionId(request);
-      const room = await env.DB.prepare('SELECT id FROM rooms WHERE id = ?1').bind(roomId).first();
-      if (!room) return json({ error: '房间不存在。' }, 404);
-      if (url.pathname === '/api/settings' && request.method === 'PUT') return handleSettings(request, env, roomId, memberId);
-      if (url.pathname === '/api/background') return handleBackground(request, env, roomId, memberId);
-      if (url.pathname === '/api/voice' && request.method === 'POST') return handleVoiceUpload(request, env, roomId, memberId);
-      if (url.pathname.startsWith('/api/voice/') && (request.method === 'GET' || request.method === 'DELETE')) return handleVoice(request, env, roomId, url.pathname.split('/').at(-1) || '', memberId);
-      if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) return handleTasks(request, env, roomId, memberId);
+      if (!user) return json({ error: '请先登录。' }, 401);
+      if (!(await roomMember(env, roomId, user.id))) return json({ error: '你不是这个房间的成员。' }, 403);
+      if (url.pathname === '/api/room' && request.method === 'DELETE') return destroyRoom(env, roomId, user);
+      if (url.pathname === '/api/settings' && request.method === 'PUT') return handleSettings(request, env, roomId, user);
+      if (url.pathname === '/api/background') return handleBackground(request, env, roomId, user.id);
+      if (url.pathname === '/api/voice' && request.method === 'POST') return handleVoiceUpload(request, env, roomId, user.id);
+      if (url.pathname.startsWith('/api/voice/') && (request.method === 'GET' || request.method === 'DELETE')) return handleVoice(request, env, roomId, url.pathname.split('/').at(-1) || '', user.id);
+      if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) return handleTasks(request, env, roomId, user.id);
       return env.ASSETS.fetch(request);
     } catch (error) {
       console.error('request_failed', error);
@@ -321,7 +494,10 @@ export default {
     }
   },
   async scheduled(_controller: ScheduledController, env: Env) {
-    await clearEphemeralData(env);
+    await Promise.all([
+      clearEphemeralData(env),
+      env.DB.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?1').bind(nowIso()).run(),
+    ]);
   },
 };
 
@@ -333,7 +509,8 @@ export class CoupleRoom extends DurableObject<Env> {
     const server = pair[1];
     const url = new URL(request.url);
     const roomId = url.searchParams.get('room') || '';
-    const memberId = cookie(request, 'meet_session') || `member_${randomToken(16)}`;
+    const memberId = request.headers.get('X-Member-Id') || '';
+    if (!memberId) return new Response('Unauthorized', { status: 401 });
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({ roomId, memberId });
     server.send(JSON.stringify({ type: 'room.ready', payload: { roomId, memberId }, createdAt: nowIso() }));
