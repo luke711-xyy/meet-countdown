@@ -364,7 +364,6 @@ elements.destroyRoom.addEventListener('click', destroyCurrentRoom); elements.log
 elements.createRoomButton.addEventListener('click', async () => { history.replaceState(null, '', '/'); const room = await ensureRoom(); if (room) await loadState(); });
 elements.contextDelete.addEventListener('click', deleteContextTarget);
 elements.taskComposer.addEventListener('submit', async (event) => { event.preventDefault(); const text = elements.taskInput.value.trim(); if (!text || !roomId) return; try { await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); elements.taskInput.value = ''; closeTaskComposer(); } catch (error) { showToast(error.message); } });
-elements.voiceRail.addEventListener('pointerleave', cancelRecording); elements.taskRail.addEventListener('pointerleave', cancelTaskComposer);
 document.addEventListener('pointerdown', (event) => { if (!event.target.closest?.('#context-menu')) closeContextMenu(); });
 document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (!elements.contextMenu.classList.contains('hidden')) closeContextMenu(); else if (elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer(); else if (recorder?.state === 'recording') cancelRecording(); });
 window.addEventListener('pointermove', (event) => {
