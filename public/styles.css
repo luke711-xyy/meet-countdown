@@ -3,7 +3,7 @@
   --ink-soft: oklch(0.9 0.025 220);
   --muted: oklch(0.78 0.035 220);
   --primary: oklch(0.55 0.091 210);
-  --accent: oklch(0.78 0.14 78);
+  --accent: oklch(0.7 0.14 242);
   --surface: oklch(0.13 0.035 220 / 0.52);
   --surface-strong: oklch(0.1 0.03 220 / 0.76);
   --line: oklch(1 0 0 / 0.18);
@@ -61,7 +61,7 @@ button { cursor: pointer; }
 
 .background-layer {
   z-index: 0;
-  background-image: radial-gradient(circle at 26% 16%, oklch(0.55 0.13 205 / 0.6), transparent 34%), radial-gradient(circle at 77% 20%, oklch(0.7 0.12 78 / 0.16), transparent 28%), radial-gradient(circle at 60% 82%, oklch(0.38 0.11 250 / 0.45), transparent 38%), linear-gradient(140deg, oklch(0.15 0.05 223), oklch(0.08 0.025 245));
+  background-image: radial-gradient(ellipse at 18% 12%, oklch(0.92 0.04 220 / 0.28), transparent 34%), radial-gradient(ellipse at 84% 10%, oklch(0.68 0.15 244 / 0.3), transparent 38%), radial-gradient(ellipse at 60% 78%, oklch(0.52 0.14 205 / 0.24), transparent 44%), radial-gradient(ellipse at 8% 88%, oklch(0.46 0.12 230 / 0.2), transparent 36%), linear-gradient(135deg, oklch(0.18 0.07 242), oklch(0.075 0.028 252));
   background-size: cover;
   filter: blur(var(--background-blur, 0px));
   transform: scale(1.04);
@@ -84,7 +84,7 @@ button { cursor: pointer; }
 
 .background-wash {
   z-index: 1;
-  background: linear-gradient(180deg, oklch(0.05 0 0 / 0.01), oklch(0.05 0.02 220 / 0.04));
+  background: linear-gradient(180deg, oklch(0.92 0.04 220 / 0.025), oklch(0.1 0.03 245 / 0.035));
 }
 
 .app-shell {
@@ -145,9 +145,9 @@ button { cursor: pointer; }
 .footer-note { color: var(--muted); font-size: 11px; }
 .footer-separator { margin: 0 8px; color: var(--accent); }
 
-.settings-dialog { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; width: 100%; height: 100%; padding: 12px; background: oklch(0.03 0.01 220 / 0.56); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.settings-dialog { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; width: 100%; height: 100%; padding: 12px; background: linear-gradient(180deg, oklch(0.55 0.14 240 / 0.18), oklch(0.08 0.04 250 / 0.36)); backdrop-filter: blur(18px) saturate(125%); -webkit-backdrop-filter: blur(18px) saturate(125%); }
 .settings-dialog.hidden { display: none; }
-.settings-sheet { width: min(520px, 100%); padding: 28px; border: 1px solid var(--line); border-radius: 16px; color: var(--ink); background: oklch(0.12 0.028 220 / 0.88); box-shadow: 0 12px 40px oklch(0 0 0 / 0.36); backdrop-filter: blur(32px) saturate(130%); -webkit-backdrop-filter: blur(32px) saturate(130%); }
+.settings-sheet { --ink: oklch(0.18 0.035 242); --ink-soft: oklch(0.28 0.045 240); --muted: oklch(0.44 0.055 238); --accent: oklch(0.58 0.17 245); --line: oklch(0.25 0.07 242 / 0.18); --line-strong: oklch(0.28 0.08 242 / 0.3); width: min(520px, 100%); padding: 28px; border: 1px solid oklch(1 0 0 / 0.62); border-radius: 18px; color: var(--ink); background: linear-gradient(135deg, oklch(1 0 0 / 0.74), oklch(0.86 0.045 235 / 0.55)); box-shadow: 0 12px 32px oklch(0.08 0.04 245 / 0.24), inset 0 1px 0 oklch(1 0 0 / 0.72); backdrop-filter: blur(32px) saturate(135%); -webkit-backdrop-filter: blur(32px) saturate(135%); }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 30px; }
 .section-kicker { margin: 0 0 8px; color: var(--accent); font-size: 10px; letter-spacing: 0.14em; }
 .dialog-heading h2 { max-width: 340px; margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.04em; line-height: 1.1; text-wrap: balance; }
@@ -157,10 +157,10 @@ button { cursor: pointer; }
 .label-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .label-row label { color: var(--ink-soft); }
 .label-row span, output { color: var(--accent); font-size: 12px; }
-input[type="datetime-local"] { width: 100%; margin-top: 10px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: oklch(1 0 0 / 0.08); color-scheme: dark; }
+input[type="datetime-local"] { width: 100%; margin-top: 10px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: oklch(1 0 0 / 0.42); color-scheme: light; }
 .field-hint { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
-.upload-box { display: flex; align-items: center; width: 100%; gap: 11px; min-height: 72px; margin-top: 10px; padding: 13px 15px; border: 1px dashed var(--line-strong); border-radius: 10px; color: var(--ink-soft); background: oklch(1 0 0 / 0.055); text-align: left; transition: border-color 180ms ease, background 180ms ease; }
-.upload-box:hover { border-color: var(--accent); background: oklch(1 0 0 / 0.09); }
+.upload-box { display: flex; align-items: center; width: 100%; gap: 11px; min-height: 72px; margin-top: 10px; padding: 13px 15px; border: 1px dashed var(--line-strong); border-radius: 10px; color: var(--ink-soft); background: oklch(1 0 0 / 0.34); text-align: left; transition: border-color 180ms ease, background 180ms ease; }
+.upload-box:hover { border-color: var(--accent); background: oklch(1 0 0 / 0.52); }
 .upload-box input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .upload-icon { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--accent); font-size: 22px; font-weight: 300; }
 .upload-box small { margin-left: auto; color: var(--muted); font-size: 10px; }
