@@ -19,6 +19,8 @@
 * { box-sizing: border-box; }
 
 html, body { min-height: 100%; }
+body, body * { -webkit-user-select: none; user-select: none; }
+input, textarea, select, [contenteditable="true"], [contenteditable=""] { -webkit-user-select: text; user-select: text; }
 
 body {
   min-height: 100svh;
@@ -152,6 +154,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .primary-button:disabled { cursor: wait; opacity: 0.55; transform: none; }
 .toast { position: fixed; bottom: 24px; left: 50%; z-index: 5; padding: 10px 15px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); background: var(--surface-strong); box-shadow: var(--shadow); font-size: 12px; opacity: 0; pointer-events: none; transform: translate(-50%, 10px); transition: opacity 180ms ease, transform 180ms var(--ease-out); backdrop-filter: blur(18px); }
 .toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+.context-menu { position: fixed; z-index: 20; min-width: 112px; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-strong); box-shadow: 0 12px 30px oklch(0 0 0 / 0.25), inset 0 1px 0 oklch(1 0 0 / 0.12); backdrop-filter: blur(20px) saturate(125%); -webkit-backdrop-filter: blur(20px) saturate(125%); }
+.context-menu button { display: block; width: 100%; padding: 8px 11px; border: 0; border-radius: 8px; color: var(--ink-soft); background: transparent; font-size: 12px; text-align: left; }
+.context-menu button:hover, .context-menu button:focus-visible { color: var(--ink); background: oklch(1 0 0 / 0.12); outline: none; }
 
 .edge-rail { position: fixed; top: 0; bottom: 0; z-index: 4; width: min(330px, 33vw); pointer-events: none; }
 .edge-rail-left { left: 0; }

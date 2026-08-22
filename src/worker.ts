@@ -270,10 +270,16 @@ async function handleVoiceUpload(request: Request, env: Env, roomId: string, mem
   return json(note, 201);
 }
 
-async function handleVoice(request: Request, env: Env, roomId: string, voiceId: string) {
+async function handleVoice(request: Request, env: Env, roomId: string, voiceId: string, memberId: string) {
   const note = await env.DB.prepare('SELECT object_key AS objectKey, mime_type AS mimeType FROM voice_notes WHERE id = ?1 AND room_id = ?2')
     .bind(voiceId, roomId).first<{ objectKey: string; mimeType: string }>();
   if (!note) return new Response('Not Found', { status: 404 });
+  if (request.method === 'DELETE') {
+    await env.MEDIA.delete(note.objectKey);
+    await env.DB.prepare('DELETE FROM voice_notes WHERE id = ?1 AND room_id = ?2').bind(voiceId, roomId).run();
+    await broadcast(env, roomId, 'voice.deleted', { id: voiceId, actorId: memberId });
+    return json({ ok: true });
+  }
   const object = await env.MEDIA.get(note.objectKey);
   if (!object) return new Response('Not Found', { status: 404 });
   return new Response(object.body, { headers: { 'Content-Type': note.mimeType, 'Cache-Control': 'private, max-age=3600' } });
@@ -306,7 +312,7 @@ export default {
       if (url.pathname === '/api/settings' && request.method === 'PUT') return handleSettings(request, env, roomId, memberId);
       if (url.pathname === '/api/background') return handleBackground(request, env, roomId, memberId);
       if (url.pathname === '/api/voice' && request.method === 'POST') return handleVoiceUpload(request, env, roomId, memberId);
-      if (url.pathname.startsWith('/api/voice/') && request.method === 'GET') return handleVoice(request, env, roomId, url.pathname.split('/').at(-1) || '');
+      if (url.pathname.startsWith('/api/voice/') && (request.method === 'GET' || request.method === 'DELETE')) return handleVoice(request, env, roomId, url.pathname.split('/').at(-1) || '', memberId);
       if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) return handleTasks(request, env, roomId, memberId);
       return env.ASSETS.fetch(request);
     } catch (error) {

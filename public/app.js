@@ -11,6 +11,7 @@ const elements = {
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
   voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), cancelVoice: $('#cancel-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
   taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), cancelTask: $('#cancel-task'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
+  contextMenu: $('#context-menu'), contextDelete: $('#context-delete'),
 };
 
 let state = null;
@@ -28,6 +29,7 @@ let recordingSession = null;
 let activeAudio = null;
 let activeVoiceItem = null;
 let activeVoicePlay = null;
+let contextTarget = null;
 let lastPointerSentAt = 0;
 let lastPointer = null;
 const water = new WaterBackground(elements.waterCanvas);
@@ -68,6 +70,33 @@ function render() {
 function showToast(message) {
   elements.toast.textContent = message; elements.toast.classList.add('is-visible'); clearTimeout(toastTimer);
   toastTimer = setTimeout(() => elements.toast.classList.remove('is-visible'), 2600);
+}
+function closeContextMenu() {
+  contextTarget = null;
+  elements.contextMenu.classList.add('hidden');
+}
+function openContextMenu(event, type, id) {
+  event.preventDefault(); event.stopPropagation();
+  contextTarget = { type, id };
+  elements.contextDelete.textContent = type === 'voice' ? '删除录音' : '删除任务';
+  elements.contextMenu.classList.remove('hidden');
+  const margin = 10;
+  const left = Math.min(event.clientX, window.innerWidth - elements.contextMenu.offsetWidth - margin);
+  const top = Math.min(event.clientY, window.innerHeight - elements.contextMenu.offsetHeight - margin);
+  elements.contextMenu.style.left = `${Math.max(margin, left)}px`;
+  elements.contextMenu.style.top = `${Math.max(margin, top)}px`;
+  requestAnimationFrame(() => elements.contextDelete.focus());
+}
+async function deleteContextTarget() {
+  const target = contextTarget;
+  closeContextMenu();
+  if (!target || !roomId) return;
+  try {
+    const path = target.type === 'voice' ? `/api/voice/${encodeURIComponent(target.id)}` : `/api/tasks/${encodeURIComponent(target.id)}`;
+    await api(path, { method: 'DELETE' });
+    if (target.type === 'voice') { state.voiceNotes = (state.voiceNotes || []).filter((note) => note.id !== target.id); renderVoiceNotes(); }
+    else { state.tasks = (state.tasks || []).filter((task) => task.id !== target.id); renderTasks(); }
+  } catch (error) { showToast(error.message); }
 }
 
 async function ensureRoom() {
@@ -130,6 +159,7 @@ async function saveSettings(event) {
 
 function makeTaskElement(task, index) {
   const item = document.createElement('article'); item.className = 'task-capsule';
+  item.addEventListener('contextmenu', (event) => openContextMenu(event, 'task', task.id));
   const checkbox = document.createElement('button'); checkbox.className = 'task-check'; checkbox.type = 'button'; checkbox.setAttribute('aria-label', task.completed ? '标记未完成' : '标记完成'); checkbox.setAttribute('aria-pressed', String(task.completed));
   checkbox.addEventListener('click', async () => { if (!roomId) return; try { await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: !task.completed }) }); } catch (error) { showToast(error.message); } });
   const text = document.createElement('span'); text.className = 'task-text'; text.textContent = task.text; if (task.completed) text.classList.add('is-completed');
@@ -144,6 +174,7 @@ function renderTasks() {
 
 function makeVoiceElement(note) {
   const item = document.createElement('article'); item.className = `voice-capsule ${note.authorId === memberId ? 'is-mine' : 'is-theirs'}`; item.title = `${note.authorId === memberId ? '我' : '对方'} · ${formatShortTime(note.createdAt)}`;
+  item.addEventListener('contextmenu', (event) => openContextMenu(event, 'voice', note.id));
   const play = document.createElement('button'); play.className = 'voice-play'; play.type = 'button'; play.textContent = '▶'; play.setAttribute('aria-label', '播放留言');
   const wave = document.createElement('span'); wave.className = 'voice-wave'; wave.setAttribute('aria-hidden', 'true');
   for (let index = 0; index < 17; index += 1) {
@@ -188,6 +219,7 @@ function applyRealtimeEvent(event) {
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);
   else if (event.type === 'task.deleted') { state.tasks = state.tasks.filter((task) => task.id !== payload.id); renderTasks(); }
   else if (event.type === 'voice.created') { state.voiceNotes = [payload, ...(state.voiceNotes || []).filter((note) => note.id !== payload.id)]; renderVoiceNotes(); }
+  else if (event.type === 'voice.deleted') { state.voiceNotes = (state.voiceNotes || []).filter((note) => note.id !== payload.id); renderVoiceNotes(); }
   else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; renderTasks(); renderVoiceNotes(); }
 }
 
@@ -262,9 +294,11 @@ elements.removeBackground.addEventListener('click', () => { selectedBackground =
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
 elements.dialog.addEventListener('click', (event) => { if (event.target === elements.dialog) closeSettings(); }); elements.voiceOrb.addEventListener('click', startRecording); elements.taskOrb.addEventListener('click', openTaskComposer);
 elements.cancelVoice.addEventListener('click', cancelRecording); elements.stopVoice.addEventListener('click', stopRecording); elements.cancelTask.addEventListener('click', cancelTaskComposer);
+elements.contextDelete.addEventListener('click', deleteContextTarget);
 elements.taskComposer.addEventListener('submit', async (event) => { event.preventDefault(); const text = elements.taskInput.value.trim(); if (!text || !roomId) return; try { await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); elements.taskInput.value = ''; closeTaskComposer(); } catch (error) { showToast(error.message); } });
 elements.voiceRail.addEventListener('pointerleave', cancelRecording); elements.taskRail.addEventListener('pointerleave', cancelTaskComposer);
-document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer(); else if (recorder?.state === 'recording') cancelRecording(); });
+document.addEventListener('pointerdown', (event) => { if (!event.target.closest?.('#context-menu')) closeContextMenu(); });
+document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (!elements.contextMenu.classList.contains('hidden')) closeContextMenu(); else if (elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer(); else if (recorder?.state === 'recording') cancelRecording(); });
 window.addEventListener('pointermove', (event) => {
   const x = event.clientX / window.innerWidth; const y = event.clientY / window.innerHeight; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
   if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
