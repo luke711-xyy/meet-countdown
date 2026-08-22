@@ -36,7 +36,7 @@ let activeVoicePlay = null;
 let contextTarget = null;
 let lastPointerSentAt = 0;
 let lastPointer = null;
-const DEFAULT_BACKGROUND = '/default-background.svg';
+const DEFAULT_BACKGROUND = '/default-background.png';
 const water = new WaterBackground(elements.waterCanvas);
 
 function pad(value) { return String(value).padStart(2, '0'); }

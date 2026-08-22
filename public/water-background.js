@@ -166,9 +166,9 @@ export class WaterBackground {
   }
 
   async setImage(source) {
+    this.ready = false;
+    this.canvas.classList.remove('water-ready');
     if (!source || !this.renderer || !this.background) {
-      this.ready = false;
-      this.canvas.classList.remove('water-ready');
       return;
     }
     const image = new Image();
@@ -180,7 +180,11 @@ export class WaterBackground {
         image.onerror = () => { window.clearTimeout(timer); reject(new Error('background image failed to load')); };
         image.src = source;
       });
-    } catch (error) { this.error = String(error); return; }
+    } catch (error) {
+      this.error = String(error);
+      this.canvas.classList.remove('water-ready');
+      return;
+    }
     this.map?.dispose();
     this.map = new THREE.Texture(image);
     this.map.colorSpace = THREE.SRGBColorSpace;
