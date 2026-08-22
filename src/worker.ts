@@ -392,8 +392,10 @@ async function handleTasks(request: Request, env: Env, roomId: string, memberId:
     return json(task, 201);
   }
   if (!taskId) return json({ error: '缺少任务 ID。' }, 400);
-  const existing = await env.DB.prepare('SELECT id FROM tasks WHERE id = ?1 AND room_id = ?2').bind(taskId, roomId).first();
+  const existing = await env.DB.prepare('SELECT id, author_id AS authorId FROM tasks WHERE id = ?1 AND room_id = ?2')
+    .bind(taskId, roomId).first<{ id: string; authorId: string }>();
   if (!existing) return json({ error: '任务不存在。' }, 404);
+  if (existing.authorId !== memberId) return json({ error: '只能完成或删除自己创建的任务。' }, 403);
   if (request.method === 'PATCH') {
     const input = await bodyJson<{ completed?: boolean }>(request);
     const completed = Boolean(input.completed);
@@ -432,10 +434,11 @@ async function handleVoiceUpload(request: Request, env: Env, roomId: string, mem
 }
 
 async function handleVoice(request: Request, env: Env, roomId: string, voiceId: string, memberId: string) {
-  const note = await env.DB.prepare('SELECT object_key AS objectKey, mime_type AS mimeType FROM voice_notes WHERE id = ?1 AND room_id = ?2')
-    .bind(voiceId, roomId).first<{ objectKey: string; mimeType: string }>();
+  const note = await env.DB.prepare('SELECT object_key AS objectKey, mime_type AS mimeType, author_id AS authorId FROM voice_notes WHERE id = ?1 AND room_id = ?2')
+    .bind(voiceId, roomId).first<{ objectKey: string; mimeType: string; authorId: string }>();
   if (!note) return new Response('Not Found', { status: 404 });
   if (request.method === 'DELETE') {
+    if (note.authorId !== memberId) return json({ error: '只能删除自己创建的录音。' }, 403);
     await env.MEDIA.delete(note.objectKey);
     await env.DB.prepare('DELETE FROM voice_notes WHERE id = ?1 AND room_id = ?2').bind(voiceId, roomId).run();
     await broadcast(env, roomId, 'voice.deleted', { id: voiceId, actorId: memberId });

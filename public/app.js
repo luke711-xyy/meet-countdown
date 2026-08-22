@@ -188,9 +188,10 @@ async function saveSettings(event) {
 }
 
 function makeTaskElement(task, index) {
-  const item = document.createElement('article'); item.className = 'task-capsule';
-  item.addEventListener('contextmenu', (event) => openContextMenu(event, 'task', task.id));
-  const checkbox = document.createElement('button'); checkbox.className = 'task-check'; checkbox.type = 'button'; checkbox.setAttribute('aria-label', task.completed ? '标记未完成' : '标记完成'); checkbox.setAttribute('aria-pressed', String(task.completed));
+  const isMine = task.authorId === memberId;
+  const item = document.createElement('article'); item.className = `task-capsule${isMine ? '' : ' is-readonly'}`;
+  item.addEventListener('contextmenu', (event) => { if (isMine) openContextMenu(event, 'task', task.id); else event.preventDefault(); });
+  const checkbox = document.createElement('button'); checkbox.className = 'task-check'; checkbox.type = 'button'; checkbox.disabled = !isMine; checkbox.setAttribute('aria-label', isMine ? (task.completed ? '标记未完成' : '标记完成') : '对方的任务'); checkbox.setAttribute('aria-pressed', String(task.completed));
   checkbox.addEventListener('click', async () => { if (!roomId) return; try { await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: !task.completed }) }); } catch (error) { showToast(error.message); } });
   const text = document.createElement('span'); text.className = 'task-text'; text.textContent = task.text; if (task.completed) text.classList.add('is-completed');
   item.append(checkbox, text); return item;
@@ -204,7 +205,7 @@ function renderTasks() {
 
 function makeVoiceElement(note) {
   const item = document.createElement('article'); item.className = `voice-capsule ${note.authorId === memberId ? 'is-mine' : 'is-theirs'}`; item.title = `${note.authorId === memberId ? '我' : '对方'} · ${formatShortTime(note.createdAt)}`;
-  item.addEventListener('contextmenu', (event) => openContextMenu(event, 'voice', note.id));
+  item.addEventListener('contextmenu', (event) => { if (note.authorId === memberId) openContextMenu(event, 'voice', note.id); else event.preventDefault(); });
   const play = document.createElement('button'); play.className = 'voice-play'; play.type = 'button'; play.textContent = '▶'; play.setAttribute('aria-label', '播放留言');
   const wave = document.createElement('span'); wave.className = 'voice-wave'; wave.setAttribute('aria-hidden', 'true');
   for (let index = 0; index < 17; index += 1) {
