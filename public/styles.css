@@ -104,7 +104,8 @@ button { cursor: pointer; }
 .topbar, .footer-note { display: flex; align-items: center; justify-content: space-between; }
 
 .brand-lockup { display: flex; align-items: center; gap: 11px; }
-.brand-mark { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--ink); font-size: 23px; line-height: 1; transform: rotate(-18deg); }
+.brand-mark { display: grid; place-items: center; width: 31px; height: 31px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--ink); line-height: 1; }
+.brand-mark svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.45; }
 .brand-name { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
 .brand-caption { margin: 2px 0 0; color: var(--muted); font-size: 10px; letter-spacing: 0.02em; }
 
@@ -193,8 +194,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .edge-orb:hover, .edge-rail.is-hovered .edge-orb, .edge-rail.is-composer-active .edge-orb, .edge-rail.is-recording .edge-orb { opacity: 1; background: oklch(1 0 0 / 0.14); }
 .edge-rail-left.is-hovered .edge-orb, .edge-rail-left.is-recording .edge-orb { transform: translate(7px, -50%); }
 .edge-rail-right.is-hovered .edge-orb, .edge-rail-right.is-composer-active .edge-orb { transform: translate(-7px, -50%); }
-.edge-orb-dot { width: 7px; height: 7px; border-radius: 50%; background: oklch(1 0 0 / 0.72); box-shadow: 0 0 0 4px oklch(1 0 0 / 0.09); }
-.edge-orb-ring { width: 16px; height: 16px; border: 1px solid oklch(1 0 0 / 0.78); border-radius: 50%; }
+.edge-orb-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.35; opacity: 0.86; }
 .edge-count { position: absolute; top: 2px; right: 1px; min-width: 13px; color: var(--ink); font-size: 9px; font-variant-numeric: tabular-nums; }
 .edge-hover-bridge { position: absolute; top: calc(50% - 28px); width: 34px; height: 56px; pointer-events: none; }
 .edge-rail-left .edge-hover-bridge { left: 48px; }
