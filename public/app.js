@@ -122,7 +122,7 @@ async function saveSettings(event) {
 }
 
 function makeTaskElement(task, index) {
-  const item = document.createElement('article'); item.className = 'task-capsule'; item.style.setProperty('--card-offset', `${(index % 3) * 4 - 4}px`);
+  const item = document.createElement('article'); item.className = 'task-capsule';
   const checkbox = document.createElement('button'); checkbox.className = 'task-check'; checkbox.type = 'button'; checkbox.setAttribute('aria-label', task.completed ? '标记未完成' : '标记完成'); checkbox.setAttribute('aria-pressed', String(task.completed));
   checkbox.addEventListener('click', async () => { if (!roomId) return; try { await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: !task.completed }) }); } catch (error) { showToast(error.message); } });
   const text = document.createElement('span'); text.className = 'task-text'; text.textContent = task.text; if (task.completed) text.classList.add('is-completed');
