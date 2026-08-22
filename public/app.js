@@ -36,6 +36,7 @@ let activeVoicePlay = null;
 let contextTarget = null;
 let lastPointerSentAt = 0;
 let lastPointer = null;
+const DEFAULT_BACKGROUND = '/default-background.svg';
 const water = new WaterBackground(elements.waterCanvas);
 
 function pad(value) { return String(value).padStart(2, '0'); }
@@ -43,7 +44,8 @@ function formatDate(date) { return new Intl.DateTimeFormat('zh-CN', { month: 'lo
 function formatCurrentTime(date) { return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date); }
 function formatShortTime(iso) { return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)); }
 function toInputValue(iso) { const date = new Date(iso); const offset = date.getTimezoneOffset() * 60000; return new Date(date.getTime() - offset).toISOString().slice(0, 16); }
-function currentBackground() { return state?.backgroundDataUrl || state?.backgroundUrl || null; }
+function customBackground() { return state?.backgroundDataUrl || state?.backgroundUrl || null; }
+function currentBackground() { return customBackground() || DEFAULT_BACKGROUND; }
 
 function setBackground(source, blurPx, contrast = Number(elements.contrastRange?.value) || 1, brightness = Number(elements.brightnessRange?.value) || 0) {
   elements.background.style.backgroundImage = source ? `url("${source}")` : '';
@@ -155,7 +157,7 @@ async function loadState() {
 function openSettings() {
   if (!state) return;
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels();
-  selectedBackground = currentBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
+  selectedBackground = customBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
   elements.fileName.textContent = selectedBackground ? '已选择照片' : '默认背景'; elements.removeBackground.classList.toggle('hidden', !selectedBackground); elements.inviteUrl.value = state.inviteUrl || `${location.origin}/?room=${encodeURIComponent(roomId || '')}`; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
   elements.dialog.classList.remove('hidden'); elements.dialog.setAttribute('aria-hidden', 'false');
 }
@@ -354,7 +356,7 @@ elements.blurRange.addEventListener('input', () => { elements.blurOutput.textCon
 elements.contrastRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
 elements.brightnessRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
 elements.chooseBackground.addEventListener('click', () => { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp,image/gif'; input.addEventListener('change', () => handleBackgroundFile(input.files?.[0])); input.click(); });
-elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(null, Number(elements.blurRange.value)); });
+elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(DEFAULT_BACKGROUND, Number(elements.blurRange.value)); });
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
 elements.dialog.addEventListener('click', (event) => { if (event.target === elements.dialog) closeSettings(); }); elements.voiceOrb.addEventListener('click', startRecording); elements.taskOrb.addEventListener('click', openTaskComposer);
 elements.cancelVoice.addEventListener('click', cancelRecording); elements.stopVoice.addEventListener('click', stopRecording); elements.cancelTask.addEventListener('click', cancelTaskComposer);
