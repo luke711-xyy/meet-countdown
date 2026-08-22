@@ -1,14 +1,15 @@
 import { WaterBackground } from './water-background.js';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
+import { DoodleCanvas } from './doodle-canvas.js';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
   authGate: $('#auth-gate'), authIntro: $('#auth-intro'), authForm: $('#auth-form'), authUsername: $('#auth-username'), authPassword: $('#auth-password'), authStatus: $('#auth-status'), authSubmit: $('#auth-submit'), loginTab: $('#login-tab'), registerTab: $('#register-tab'), roomGate: $('#room-gate'), roomGateMessage: $('#room-gate-message'), createRoomButton: $('#create-room-button'), accountName: $('#account-name'),
-  background: $('.background-layer'), waterCanvas: $('#water-canvas'), targetSummary: $('#target-summary'),
+  background: $('.background-layer'), waterCanvas: $('#water-canvas'), doodleCanvas: $('#doodle-canvas'), targetSummary: $('#target-summary'),
   days: $('#days'), hours: $('#hours'), minutes: $('#minutes'), seconds: $('#seconds'), currentTime: $('#current-time'),
   timezoneLabel: $('#timezone-label'), dialog: $('#settings-dialog'), form: $('#settings-form'), targetAt: $('#target-at'),
   chooseBackground: $('#choose-background'), fileName: $('#file-name'), removeBackground: $('#remove-background'),
-  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
+  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), brushColor: $('#brush-color'), brushColorOutput: $('#brush-color-output'), brushStyleNeon: $('#brush-style-neon'), brushStyleFireworks: $('#brush-style-fireworks'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
   voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), cancelVoice: $('#cancel-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
   taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), cancelTask: $('#cancel-task'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
@@ -36,8 +37,11 @@ let activeVoicePlay = null;
 let contextTarget = null;
 let lastPointerSentAt = 0;
 let lastPointer = null;
+let selectedBrushStyle = 'neon';
+let doodlePointer = null;
 const DEFAULT_BACKGROUND = '/default-background.png';
 const water = new WaterBackground(elements.waterCanvas);
+const doodle = new DoodleCanvas(elements.doodleCanvas);
 
 function pad(value) { return String(value).padStart(2, '0'); }
 function formatDate(date) { return new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(date); }
@@ -59,6 +63,50 @@ function updateToneLabels() {
   elements.contrastOutput.textContent = `${Math.round(Number(elements.contrastRange.value) * 100)}%`;
   const brightness = Math.round(Number(elements.brightnessRange.value) * 100);
   elements.brightnessOutput.textContent = `${brightness > 0 ? '+' : ''}${brightness}%`;
+}
+
+function setBrushSettings(color = '#8be9fd', style = 'neon') {
+  const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : '#8be9fd';
+  selectedBrushStyle = style === 'fireworks' ? 'fireworks' : 'neon';
+  elements.brushColor.value = safeColor;
+  elements.brushColorOutput.textContent = safeColor.toUpperCase();
+  elements.brushStyleNeon.classList.toggle('is-active', selectedBrushStyle === 'neon');
+  elements.brushStyleFireworks.classList.toggle('is-active', selectedBrushStyle === 'fireworks');
+  doodle.configure({ color: safeColor, style: selectedBrushStyle, authorId: memberId || '' });
+}
+
+function doodlePoint(event) {
+  return { x: Math.max(0, Math.min(1, event.clientX / window.innerWidth)), y: Math.max(0, Math.min(1, event.clientY / window.innerHeight)) };
+}
+
+function isDoodleSurface(event) {
+  return !event.target?.closest?.('button, input, textarea, select, form, .edge-rail, .settings-dialog, .auth-gate, .room-gate, .context-menu');
+}
+
+function sendDoodlePreview(stroke, phase, point) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !stroke || !point) return;
+  socket.send(JSON.stringify({ type: 'doodle.preview', payload: { id: stroke.id, phase, x: point.x, y: point.y, style: stroke.style, color: stroke.color } }));
+}
+
+async function persistDoodle(stroke) {
+  try {
+    const saved = await api('/api/doodles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: stroke.id, style: stroke.style, color: stroke.color, points: stroke.points }) });
+    state.doodles = [...(state.doodles || []).filter((item) => item.id !== saved.id), saved];
+    doodle.add(saved);
+  } catch (error) {
+    doodle.remove(stroke.id);
+    showToast(error.message);
+  }
+}
+
+async function eraseDoodle(id) {
+  try {
+    await api(`/api/doodles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== id);
+  } catch (error) {
+    showToast(error.message);
+    await syncEphemeralState();
+  }
 }
 
 function render() {
@@ -150,13 +198,14 @@ async function api(path, options = {}) {
 async function loadState() {
   try {
     state = await api('/api/state'); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
-    renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
+    setBrushSettings(state.brushColor, state.brushStyle); doodle.hydrate(state.doodles || [], memberId); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
   } catch (error) { elements.targetSummary.textContent = '请确认后端服务正在运行'; console.error(error); }
 }
 
 function openSettings() {
   if (!state) return;
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels();
+  setBrushSettings(state.brushColor, state.brushStyle);
   selectedBackground = customBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
   elements.fileName.textContent = selectedBackground ? '已选择照片' : '默认背景'; elements.removeBackground.classList.toggle('hidden', !selectedBackground); elements.inviteUrl.value = state.inviteUrl || `${location.origin}/?room=${encodeURIComponent(roomId || '')}`; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
   elements.dialog.classList.remove('hidden'); elements.dialog.setAttribute('aria-hidden', 'false');
@@ -179,11 +228,11 @@ async function saveSettings(event) {
     if (roomId) {
       if (backgroundSelection === 'upload' && selectedBackgroundFile) await api('/api/background', { method: 'PUT', headers: { 'Content-Type': selectedBackgroundFile.type }, body: selectedBackgroundFile });
       else if (backgroundSelection === 'remove') await api('/api/background', { method: 'DELETE' });
-      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value) }) });
+      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
     } else {
-      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value) }) });
+      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
     }
-    setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
+    setBrushSettings(state.brushColor, state.brushStyle); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
   } catch (error) { elements.saveStatus.textContent = error.message; } finally { elements.saveButton.disabled = false; }
 }
 
@@ -233,8 +282,10 @@ async function syncEphemeralState() {
     const latest = await api('/api/state');
     const tasksChanged = JSON.stringify(latest.tasks || []) !== JSON.stringify(state?.tasks || []);
     const voicesChanged = JSON.stringify(latest.voiceNotes || []) !== JSON.stringify(state?.voiceNotes || []);
+    const doodlesChanged = JSON.stringify(latest.doodles || []) !== JSON.stringify(state?.doodles || []);
     if (tasksChanged) { state.tasks = latest.tasks || []; renderTasks(); }
     if (voicesChanged) { state.voiceNotes = latest.voiceNotes || []; renderVoiceNotes(); }
+    if (doodlesChanged) { state.doodles = latest.doodles || []; doodle.hydrate(state.doodles, memberId); }
   } catch {
     // Realtime remains the primary path; the periodic readback only heals stale tabs.
   }
@@ -244,16 +295,19 @@ function updateTaskFromEvent(task) { const item = state.tasks.find((candidate) =
 function applyRealtimeEvent(event) {
   const payload = event.payload || {};
   if (event.type === 'pointer') window.setTimeout(() => water.addRipple(payload.x, payload.y, Number(payload.strength || 0.04) * 0.72), 110);
-  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 0; elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
+  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 0; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = payload.brushStyle || state.brushStyle; setBrushSettings(state.brushColor, state.brushStyle); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
   else if (event.type === 'background.updated') { state.backgroundUrl = payload.backgroundUrl; state.backgroundDataUrl = null; setBackground(currentBackground(), state.blurPx); }
   else if (event.type === 'task.created') { state.tasks = [...(state.tasks || []).filter((task) => task.id !== payload.id), payload]; renderTasks(); }
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);
   else if (event.type === 'task.deleted') { state.tasks = state.tasks.filter((task) => task.id !== payload.id); renderTasks(); }
   else if (event.type === 'voice.created') { state.voiceNotes = [...(state.voiceNotes || []).filter((note) => note.id !== payload.id), payload]; renderVoiceNotes(); }
   else if (event.type === 'voice.deleted') { state.voiceNotes = (state.voiceNotes || []).filter((note) => note.id !== payload.id); renderVoiceNotes(); }
+  else if (event.type === 'doodle.preview') doodle.applyPreview(payload);
+  else if (event.type === 'doodle.created') { state.doodles = [...(state.doodles || []).filter((stroke) => stroke.id !== payload.id), payload]; doodle.add(payload); }
+  else if (event.type === 'doodle.deleted') { state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== payload.id); doodle.remove(payload.id); }
   else if (event.type === 'room.joined') { state.members = [...(state.members || []).filter((member) => member.id !== payload.userId), { id: payload.userId, username: payload.username, slot: payload.slot }].sort((a, b) => a.slot - b.slot); elements.roomMembers.textContent = `${state.members.length} / 2`; showToast(`${payload.username || '对方'} 已加入房间`); }
   else if (event.type === 'room.destroyed') { state = null; socket?.close(); socket = null; showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
-  else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; renderTasks(); renderVoiceNotes(); }
+  else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; state.doodles = []; doodle.clear(); renderTasks(); renderVoiceNotes(); }
 }
 
 function connectRealtime() {
@@ -356,6 +410,9 @@ async function logout() {
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
 elements.contrastRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
 elements.brightnessRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
+elements.brushColor.addEventListener('input', () => { elements.brushColorOutput.textContent = elements.brushColor.value.toUpperCase(); doodle.configure({ color: elements.brushColor.value }); });
+elements.brushStyleNeon.addEventListener('click', () => setBrushSettings(elements.brushColor.value, 'neon'));
+elements.brushStyleFireworks.addEventListener('click', () => setBrushSettings(elements.brushColor.value, 'fireworks'));
 elements.chooseBackground.addEventListener('click', () => { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp,image/gif'; input.addEventListener('change', () => handleBackgroundFile(input.files?.[0])); input.click(); });
 elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(DEFAULT_BACKGROUND, Number(elements.blurRange.value)); });
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
@@ -372,11 +429,50 @@ document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') re
 window.addEventListener('pointermove', (event) => {
   const x = event.clientX / window.innerWidth; const y = event.clientY / window.innerHeight; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
   if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
+  if (doodlePointer?.pointerId === event.pointerId) {
+    const point = doodlePoint(event);
+    if (doodlePointer.mode === 'draw') {
+      const added = doodle.appendDraw(point);
+      if (added && performance.now() - doodlePointer.lastSentAt > 24) { doodlePointer.lastSentAt = performance.now(); sendDoodlePreview(doodlePointer.stroke, 'point', added); }
+    } else if (doodlePointer.mode === 'erase') {
+      doodle.eraseAt(point, memberId, eraseDoodle);
+    }
+  }
   lastPointer = { x, y, now }; const rail = event.target?.closest?.('.edge-rail');
   setRailHover(elements.voiceRail, Boolean(rail === elements.voiceRail || event.clientX < 92));
   setRailHover(elements.taskRail, Boolean(rail === elements.taskRail || event.clientX > window.innerWidth - 92));
 }, { passive: true });
-window.addEventListener('pointerdown', (event) => water.addRipple(event.clientX / window.innerWidth, event.clientY / window.innerHeight, 0.12), { passive: true });
+window.addEventListener('pointerdown', (event) => {
+  water.addRipple(event.clientX / window.innerWidth, event.clientY / window.innerHeight, 0.12);
+  if (!isDoodleSurface(event) || (event.button !== 0 && event.button !== 2)) return;
+  const point = doodlePoint(event);
+  if (event.button === 0) {
+    const stroke = doodle.beginDraw(point);
+    if (!stroke) return;
+    doodlePointer = { pointerId: event.pointerId, mode: 'draw', stroke, lastSentAt: performance.now() };
+    sendDoodlePreview(stroke, 'start', point);
+  } else {
+    doodle.beginErase();
+    doodlePointer = { pointerId: event.pointerId, mode: 'erase' };
+    doodle.eraseAt(point, memberId, eraseDoodle);
+  }
+}, { passive: true });
+window.addEventListener('pointerup', (event) => {
+  if (doodlePointer?.pointerId !== event.pointerId) return;
+  if (doodlePointer.mode === 'draw') {
+    const stroke = doodle.finishDraw();
+    if (stroke) { sendDoodlePreview(stroke, 'point', stroke.points[stroke.points.length - 1]); void persistDoodle(stroke); }
+  }
+  doodlePointer = null;
+});
+window.addEventListener('pointercancel', (event) => {
+  if (doodlePointer?.pointerId !== event.pointerId) return;
+  if (doodlePointer.mode === 'draw') doodle.cancelDraw();
+  doodlePointer = null;
+});
+window.addEventListener('contextmenu', (event) => {
+  if (isDoodleSurface(event)) event.preventDefault();
+});
 
 await initHtmlCanvasBridge(); await water.init();
 await bootApp(); setInterval(render, 250); setInterval(syncEphemeralState, 30000);

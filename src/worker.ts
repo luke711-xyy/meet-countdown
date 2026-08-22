@@ -21,6 +21,10 @@ type AuthUser = {
 const ROOM_PATTERN = /^room_[a-z0-9]{10}$/;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
+const MAX_DOODLE_POINTS = 800;
+const DOODLE_TTL_MS = 24 * 60 * 60 * 1000;
+const DOODLE_STYLES = new Set(['neon', 'fireworks']);
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const AUTH_COOKIE = 'meet_auth';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 const PASSWORD_ITERATIONS = 100_000;
@@ -46,12 +50,30 @@ async function clearEphemeralData(env: Env) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM voice_notes'),
     env.DB.prepare('DELETE FROM tasks'),
+    env.DB.prepare('DELETE FROM doodles'),
   ]);
 
   const rooms = await env.DB.prepare('SELECT id FROM rooms').all<{ id: string }>();
   const clearedAt = nowIso();
   await Promise.all((rooms.results || []).map((room) => broadcast(env, room.id, 'ephemeral.cleared', { clearedAt })));
   return { clearedAt, voiceObjects: voiceObjectKeys.length, rooms: rooms.results?.length || 0 };
+}
+
+function validDoodleColor(value: unknown) {
+  return typeof value === 'string' && HEX_COLOR_PATTERN.test(value);
+}
+
+function validDoodleStyle(value: unknown): value is 'neon' | 'fireworks' {
+  return typeof value === 'string' && DOODLE_STYLES.has(value);
+}
+
+function validDoodlePoints(value: unknown) {
+  if (!Array.isArray(value) || value.length < 2 || value.length > MAX_DOODLE_POINTS) return false;
+  return value.every((point) => {
+    if (!point || typeof point !== 'object') return false;
+    const { x, y } = point as { x?: unknown; y?: unknown };
+    return typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1 && y >= 0 && y <= 1;
+  });
 }
 
 function randomToken(length = 10) {
@@ -227,6 +249,9 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
   const membership = await roomMember(env, roomId, user.id);
   if (!membership) return null;
 
+  const brushSettings = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle FROM users WHERE id = ?1')
+    .bind(user.id).first<{ brushColor: string; brushStyle: string }>();
+
   const tasksResult = await env.DB.prepare(`
     SELECT id, text, completed, author_id AS authorId, completed_by AS completedBy, created_at AS createdAt, updated_at AS updatedAt
     FROM tasks WHERE room_id = ?1 ORDER BY created_at ASC, id ASC
@@ -242,6 +267,13 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     )
     ORDER BY createdAt ASC, id ASC
   `).bind(roomId).all();
+  const doodleCutoff = new Date(Date.now() - DOODLE_TTL_MS).toISOString();
+  const doodleResult = await env.DB.prepare(`
+    SELECT id, author_id AS authorId, style, color, points_json AS pointsJson, created_at AS createdAt
+    FROM doodles
+    WHERE room_id = ?1 AND created_at > ?2
+    ORDER BY created_at ASC, id ASC
+  `).bind(roomId, doodleCutoff).all();
   const membersResult = await env.DB.prepare(`
     SELECT users.id AS id, users.username AS username, room_members.slot AS slot
     FROM room_members JOIN users ON users.id = room_members.user_id
@@ -254,6 +286,8 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     blurPx: room.blurPx,
     contrast: room.contrast,
     brightness: room.brightness,
+    brushColor: brushSettings?.brushColor || '#8be9fd',
+    brushStyle: validDoodleStyle(brushSettings?.brushStyle) ? brushSettings.brushStyle : 'neon',
     backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}` : null,
     updatedAt: room.updatedAt,
     timeZone: 'Asia/Singapore',
@@ -271,6 +305,15 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
       url: `/api/voice/${encodeURIComponent(String(note.id))}?room=${encodeURIComponent(roomId)}`,
       mine: note.authorId === user.id,
     })),
+    doodles: (doodleResult.results || []).flatMap((doodle) => {
+      try {
+        const points = JSON.parse(String(doodle.pointsJson));
+        if (!validDoodlePoints(points) || !validDoodleColor(doodle.color) || !validDoodleStyle(doodle.style)) return [];
+        return [{ id: doodle.id, authorId: doodle.authorId, style: doodle.style, color: doodle.color, points, createdAt: doodle.createdAt, mine: doodle.authorId === user.id }];
+      } catch {
+        return [];
+      }
+    }),
   };
 }
 
@@ -322,6 +365,7 @@ async function destroyRoom(env: Env, roomId: string, user: AuthUser) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM voice_notes WHERE room_id = ?1').bind(roomId),
     env.DB.prepare('DELETE FROM tasks WHERE room_id = ?1').bind(roomId),
+    env.DB.prepare('DELETE FROM doodles WHERE room_id = ?1').bind(roomId),
     env.DB.prepare('DELETE FROM room_members WHERE room_id = ?1').bind(roomId),
     env.DB.prepare('DELETE FROM rooms WHERE id = ?1').bind(roomId),
   ]);
@@ -329,19 +373,29 @@ async function destroyRoom(env: Env, roomId: string, user: AuthUser) {
 }
 
 async function handleSettings(request: Request, env: Env, roomId: string, user: AuthUser) {
-  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number }>(request);
+  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number; brushColor?: string; brushStyle?: string }>(request);
   const targetAt = new Date(input.targetAt || '');
   const blurPx = Number(input.blurPx);
   const contrast = input.contrast === undefined ? 1 : Number(input.contrast);
   const brightness = input.brightness === undefined ? 0 : Number(input.brightness);
+  const currentBrush = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle FROM users WHERE id = ?1')
+    .bind(user.id).first<{ brushColor: string; brushStyle: string }>();
+  const brushColor = input.brushColor === undefined ? (currentBrush?.brushColor || '#8be9fd') : String(input.brushColor);
+  const brushStyle = input.brushStyle === undefined ? (currentBrush?.brushStyle || 'neon') : String(input.brushStyle);
   if (Number.isNaN(targetAt.getTime())) return json({ error: '请输入有效的见面时间。' }, 400);
   if (!Number.isInteger(blurPx) || blurPx < 0 || blurPx > 24) return json({ error: '背景模糊度需要在 0 到 24 之间。' }, 400);
   if (!Number.isFinite(contrast) || contrast < 0.75 || contrast > 1.25) return json({ error: '背景对比度需要在 75% 到 125% 之间。' }, 400);
   if (!Number.isFinite(brightness) || brightness < -0.15 || brightness > 0.15) return json({ error: '背景亮度需要在 -15% 到 15% 之间。' }, 400);
+  if (!validDoodleColor(brushColor)) return json({ error: '涂鸦颜色格式无效。' }, 400);
+  if (!validDoodleStyle(brushStyle)) return json({ error: '涂鸦样式无效。' }, 400);
   const updatedAt = nowIso();
-  await env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, updated_at = ?5 WHERE id = ?6')
-    .bind(targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, roomId).run();
-  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, actorId: user.id });
+  await env.DB.batch([
+    env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, updated_at = ?5 WHERE id = ?6')
+      .bind(targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, roomId),
+    env.DB.prepare('UPDATE users SET brush_color = ?1, brush_style = ?2 WHERE id = ?3')
+      .bind(brushColor, brushStyle, user.id),
+  ]);
+  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, brushColor, brushStyle, updatedAt, actorId: user.id });
   return json(await roomState(env, request, roomId, user));
 }
 
@@ -421,6 +475,38 @@ async function handleTasks(request: Request, env: Env, roomId: string, memberId:
   return json({ error: 'Method not allowed' }, 405);
 }
 
+async function handleDoodles(request: Request, env: Env, roomId: string, doodleId: string, memberId: string) {
+  if (request.method === 'POST') {
+    const input = await bodyJson<{ id?: string; style?: string; color?: string; points?: unknown }>(request);
+    const id = String(input.id || `doodle_${crypto.randomUUID()}`);
+    const style = String(input.style || '');
+    const color = String(input.color || '');
+    if (!/^doodle_[a-zA-Z0-9_-]{8,100}$/.test(id)) return json({ error: '涂鸦 ID 无效。' }, 400);
+    if (!validDoodleStyle(style)) return json({ error: '涂鸦样式无效。' }, 400);
+    if (!validDoodleColor(color)) return json({ error: '涂鸦颜色格式无效。' }, 400);
+    if (!validDoodlePoints(input.points)) return json({ error: '涂鸦轨迹无效。' }, 400);
+    const createdAt = nowIso();
+    await env.DB.prepare(`
+      INSERT INTO doodles (id, room_id, author_id, style, color, points_json, created_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+    `).bind(id, roomId, memberId, style, color, JSON.stringify(input.points), createdAt).run();
+    const doodle = { id, authorId: memberId, style, color, points: input.points, createdAt, mine: true };
+    await broadcast(env, roomId, 'doodle.created', doodle);
+    return json(doodle, 201);
+  }
+  if (!doodleId) return json({ error: '缺少涂鸦 ID。' }, 400);
+  const existing = await env.DB.prepare('SELECT id, author_id AS authorId FROM doodles WHERE id = ?1 AND room_id = ?2')
+    .bind(doodleId, roomId).first<{ id: string; authorId: string }>();
+  if (!existing) return json({ error: '涂鸦不存在。' }, 404);
+  if (existing.authorId !== memberId) return json({ error: '只能擦除自己创建的涂鸦。' }, 403);
+  if (request.method === 'DELETE') {
+    await env.DB.prepare('DELETE FROM doodles WHERE id = ?1 AND room_id = ?2').bind(doodleId, roomId).run();
+    await broadcast(env, roomId, 'doodle.deleted', { id: doodleId, actorId: memberId });
+    return json({ ok: true });
+  }
+  return json({ error: 'Method not allowed' }, 405);
+}
+
 async function handleVoiceUpload(request: Request, env: Env, roomId: string, memberId: string) {
   const length = Number(request.headers.get('Content-Length') || 0);
   if (length > MAX_AUDIO_BYTES) return json({ error: '录音请控制在 12 MB 以内。' }, 413);
@@ -494,6 +580,8 @@ export default {
       if (url.pathname === '/api/room' && request.method === 'DELETE') return destroyRoom(env, roomId, user);
       if (url.pathname === '/api/settings' && request.method === 'PUT') return handleSettings(request, env, roomId, user);
       if (url.pathname === '/api/background') return handleBackground(request, env, roomId, user.id);
+      if (url.pathname === '/api/doodles' && request.method === 'POST') return handleDoodles(request, env, roomId, '', user.id);
+      if (url.pathname.startsWith('/api/doodles/') && request.method === 'DELETE') return handleDoodles(request, env, roomId, url.pathname.split('/').at(-1) || '', user.id);
       if (url.pathname === '/api/voice' && request.method === 'POST') return handleVoiceUpload(request, env, roomId, user.id);
       if (url.pathname.startsWith('/api/voice/') && (request.method === 'GET' || request.method === 'DELETE')) return handleVoice(request, env, roomId, url.pathname.split('/').at(-1) || '', user.id);
       if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) return handleTasks(request, env, roomId, user.id);
@@ -538,6 +626,28 @@ export class CoupleRoom extends DurableObject<Env> {
     if (typeof message !== 'string') return;
     try {
       const input = JSON.parse(message) as { type?: string; payload?: Record<string, unknown> };
+      if (input.type === 'doodle.preview' && input.payload) {
+        const payload = input.payload;
+        const id = String(payload.id || '');
+        const phase = payload.phase === 'start' ? 'start' : 'point';
+        const x = Number(payload.x);
+        const y = Number(payload.y);
+        const style = String(payload.style || '');
+        const color = String(payload.color || '');
+        if (!/^doodle_[a-zA-Z0-9_-]{8,100}$/.test(id) || !validDoodleStyle(style) || !validDoodleColor(color) || ![x, y].every(Number.isFinite) || x < 0 || x > 1 || y < 0 || y > 1) return;
+        const attachment = socket.deserializeAttachment() as { memberId?: string } | null;
+        const event = JSON.stringify({
+          type: 'doodle.preview',
+          payload: { id, phase, x, y, style, color, actorId: attachment?.memberId || '' },
+          createdAt: nowIso(),
+        });
+        for (const peer of this.ctx.getWebSockets()) {
+          if (peer !== socket) {
+            try { peer.send(event); } catch { /* disconnected sockets are cleaned by the runtime */ }
+          }
+        }
+        return;
+      }
       if (input.type !== 'pointer' || !input.payload) return;
       const payload = input.payload;
       const x = Number(payload.x);

@@ -41,6 +41,7 @@
 
     <div class="background-layer" aria-hidden="true"></div>
     <canvas class="water-canvas" id="water-canvas" aria-hidden="true"></canvas>
+    <canvas class="doodle-canvas" id="doodle-canvas" aria-hidden="true"></canvas>
     <div class="background-wash" aria-hidden="true"></div>
     <canvas class="html-canvas-probe" id="html-canvas-probe" layoutsubtree aria-hidden="true"><div id="html-canvas-probe-content"> </div></canvas>
 
@@ -153,6 +154,15 @@
           <div class="range-labels"><span>较暗</span><span>较亮</span></div>
         </div>
 
+        <div class="form-field brush-settings">
+          <div class="label-row"><label for="brush-color">涂鸦颜色</label><output id="brush-color-output">#8BE9FD</output></div>
+          <input id="brush-color" type="color" value="#8be9fd" />
+          <div class="brush-style-options" role="group" aria-label="涂鸦样式">
+            <button class="brush-style-option is-active" id="brush-style-neon" type="button" data-brush-style="neon">霓虹灯</button>
+            <button class="brush-style-option" id="brush-style-fireworks" type="button" data-brush-style="fireworks">荧光棒烟花</button>
+          </div>
+        </div>
+
         <div class="room-settings">
           <div class="label-row"><label for="invite-url">房间邀请</label><span id="room-members">1 / 2</span></div>
           <div class="invite-row"><input id="invite-url" type="text" readonly aria-label="房间邀请链接" /><button class="text-button" id="copy-invite" type="button">复制</button></div>
@@ -171,6 +181,6 @@
     <div class="context-menu hidden" id="context-menu" role="menu">
       <button id="context-delete" type="button" role="menuitem">删除</button>
     </div>
-    <script type="module" src="/app.js?v=5"></script>
+    <script type="module" src="/app.js?v=6"></script>
   </body>
 </html>
