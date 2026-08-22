@@ -9,8 +9,8 @@ const elements = {
   chooseBackground: $('#choose-background'), fileName: $('#file-name'), removeBackground: $('#remove-background'),
   blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
-  voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
-  taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
+  voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), cancelVoice: $('#cancel-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
+  taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), cancelTask: $('#cancel-task'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
 };
 
 let state = null;
@@ -22,9 +22,9 @@ let backgroundSelection = 'unchanged';
 let toastTimer = null;
 let socket = null;
 let recorder = null;
-let recorderChunks = [];
 let recorderStartedAt = 0;
 let recorderTimer = null;
+let recordingSession = null;
 let activeAudio = null;
 let activeVoiceItem = null;
 let activeVoicePlay = null;
@@ -204,32 +204,55 @@ async function startRecording() {
   if (!roomId) return showToast('部署到 Cloudflare 后可使用留言');
   if (recorder?.state === 'recording') return stopRecording();
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return showToast('当前浏览器不支持录音');
+  elements.voiceRail.classList.add('is-hovered');
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type)) || '';
-    recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); recorderChunks = []; recorderStartedAt = performance.now();
-    recorder.addEventListener('dataavailable', (event) => { if (event.data.size) recorderChunks.push(event.data); });
-    recorder.addEventListener('stop', async () => {
-      stream.getTracks().forEach((track) => track.stop()); const blob = new Blob(recorderChunks, { type: recorder.mimeType || 'audio/webm' });
-      try { const note = await api('/api/voice', { method: 'POST', headers: { 'Content-Type': blob.type, 'X-Duration-Ms': String(Math.round(performance.now() - recorderStartedAt)) }, body: blob }); state.voiceNotes = [note, ...(state.voiceNotes || []).filter((existing) => existing.id !== note.id)]; renderVoiceNotes(); } catch (error) { showToast(error.message); }
+    const activeRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined); const chunks = []; const session = { recorder: activeRecorder, startedAt: performance.now(), discarded: false }; recordingSession = session; recorder = activeRecorder; recorderStartedAt = session.startedAt;
+    activeRecorder.addEventListener('dataavailable', (event) => { if (event.data.size) chunks.push(event.data); });
+    activeRecorder.addEventListener('stop', async () => {
+      const shouldUpload = !session.discarded;
+      stream.getTracks().forEach((track) => track.stop());
+      const blob = new Blob(chunks, { type: activeRecorder.mimeType || 'audio/webm' });
+      if (recordingSession === session) recordingSession = null;
+      if (recorder === activeRecorder) recorder = null;
+      if (!shouldUpload) return;
+      try { const note = await api('/api/voice', { method: 'POST', headers: { 'Content-Type': blob.type, 'X-Duration-Ms': String(Math.round(performance.now() - session.startedAt)) }, body: blob }); state.voiceNotes = [note, ...(state.voiceNotes || []).filter((existing) => existing.id !== note.id)]; renderVoiceNotes(); } catch (error) { showToast(error.message); }
     });
-    recorder.start(); elements.voiceRail.classList.add('is-recording'); elements.voiceRecordingCapsule.classList.remove('hidden'); elements.voiceOrb.setAttribute('aria-expanded', 'true');
+    activeRecorder.start(); elements.voiceRail.classList.add('is-recording'); elements.voiceRecordingCapsule.classList.remove('hidden'); elements.voiceOrb.setAttribute('aria-expanded', 'true');
     recorderTimer = window.setInterval(() => { elements.recordTime.textContent = `${Math.floor((performance.now() - recorderStartedAt) / 1000)}s`; }, 250);
-  } catch (error) { showToast(error.name === 'NotAllowedError' ? '请允许浏览器使用麦克风' : '无法开始录音'); }
+    if (!elements.voiceRail.classList.contains('is-hovered')) cancelRecording();
+  } catch (error) { elements.voiceRail.classList.remove('is-hovered'); showToast(error.name === 'NotAllowedError' ? '请允许浏览器使用麦克风' : '无法开始录音'); }
 }
-function stopRecording() {
-  if (recorder && recorder.state !== 'inactive') recorder.stop();
+function resetRecordingUi() {
   clearInterval(recorderTimer); recorderTimer = null; elements.recordTime.textContent = '';
   elements.voiceRail.classList.remove('is-recording'); elements.voiceRecordingCapsule.classList.add('hidden'); elements.voiceOrb.setAttribute('aria-expanded', 'false');
 }
+function stopRecording() {
+  if (recordingSession) recordingSession.discarded = false;
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  resetRecordingUi();
+}
+function cancelRecording() {
+  if (recordingSession) recordingSession.discarded = true;
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  resetRecordingUi();
+}
 function openTaskComposer() {
   if (!roomId) return showToast('部署到 Cloudflare 后可使用清单');
+  elements.taskRail.classList.add('is-hovered');
   elements.taskRail.classList.add('is-composer-active'); elements.taskComposer.classList.remove('hidden'); elements.taskOrb.setAttribute('aria-expanded', 'true');
   requestAnimationFrame(() => elements.taskInput.focus());
 }
 function closeTaskComposer() {
   elements.taskRail.classList.remove('is-composer-active'); elements.taskComposer.classList.add('hidden'); elements.taskOrb.setAttribute('aria-expanded', 'false');
 }
-function setRailHover(rail, hovered) { rail.classList.toggle('is-hovered', hovered); }
+function cancelTaskComposer() { elements.taskInput.value = ''; closeTaskComposer(); }
+function setRailHover(rail, hovered) {
+  rail.classList.toggle('is-hovered', hovered);
+  if (hovered) return;
+  if (rail === elements.voiceRail && recorder?.state === 'recording') cancelRecording();
+  if (rail === elements.taskRail && elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer();
+}
 
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
 elements.contrastRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
@@ -238,9 +261,10 @@ elements.chooseBackground.addEventListener('click', () => { const input = docume
 elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(null, Number(elements.blurRange.value)); });
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
 elements.dialog.addEventListener('click', (event) => { if (event.target === elements.dialog) closeSettings(); }); elements.voiceOrb.addEventListener('click', startRecording); elements.taskOrb.addEventListener('click', openTaskComposer);
-elements.stopVoice.addEventListener('click', stopRecording);
+elements.cancelVoice.addEventListener('click', cancelRecording); elements.stopVoice.addEventListener('click', stopRecording); elements.cancelTask.addEventListener('click', cancelTaskComposer);
 elements.taskComposer.addEventListener('submit', async (event) => { event.preventDefault(); const text = elements.taskInput.value.trim(); if (!text || !roomId) return; try { await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); elements.taskInput.value = ''; closeTaskComposer(); } catch (error) { showToast(error.message); } });
-document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (elements.taskRail.classList.contains('is-composer-active')) closeTaskComposer(); else if (recorder?.state === 'recording') stopRecording(); });
+elements.voiceRail.addEventListener('pointerleave', cancelRecording); elements.taskRail.addEventListener('pointerleave', cancelTaskComposer);
+document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer(); else if (recorder?.state === 'recording') cancelRecording(); });
 window.addEventListener('pointermove', (event) => {
   const x = event.clientX / window.innerWidth; const y = event.clientY / window.innerHeight; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
   if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
