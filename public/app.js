@@ -210,7 +210,7 @@ async function startRecording() {
     recorder.addEventListener('dataavailable', (event) => { if (event.data.size) recorderChunks.push(event.data); });
     recorder.addEventListener('stop', async () => {
       stream.getTracks().forEach((track) => track.stop()); const blob = new Blob(recorderChunks, { type: recorder.mimeType || 'audio/webm' });
-      try { const note = await api('/api/voice', { method: 'POST', headers: { 'Content-Type': blob.type, 'X-Duration-Ms': String(Math.round(performance.now() - recorderStartedAt)) }, body: blob }); state.voiceNotes = [note, ...(state.voiceNotes || [])]; renderVoiceNotes(); } catch (error) { showToast(error.message); }
+      try { const note = await api('/api/voice', { method: 'POST', headers: { 'Content-Type': blob.type, 'X-Duration-Ms': String(Math.round(performance.now() - recorderStartedAt)) }, body: blob }); state.voiceNotes = [note, ...(state.voiceNotes || []).filter((existing) => existing.id !== note.id)]; renderVoiceNotes(); } catch (error) { showToast(error.message); }
     });
     recorder.start(); elements.voiceRail.classList.add('is-recording'); elements.voiceRecordingCapsule.classList.remove('hidden'); elements.voiceOrb.setAttribute('aria-expanded', 'true');
     recorderTimer = window.setInterval(() => { elements.recordTime.textContent = `${Math.floor((performance.now() - recorderStartedAt) / 1000)}s`; }, 250);
