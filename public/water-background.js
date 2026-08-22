@@ -74,8 +74,9 @@ const backgroundFragment = `
     vec2 photoUv = coverUv(vUv) + vec2(horizontal, vertical) * uDisplacement;
     photoUv += center * vec2(0.0007, -0.0007);
     vec3 photo = texture2D(uMap, clamp(photoUv, 0.001, 0.999)).rgb;
-    photo = pow(max(photo, vec3(0.0)), vec3(0.78));
-    photo = clamp(photo * 0.92 + vec3(0.035), 0.0, 1.0);
+    photo = pow(max(photo, vec3(0.0)), vec3(0.86));
+    photo = vec3(0.5) + (photo - vec3(0.5)) * 0.82;
+    photo = clamp(photo + vec3(0.02), 0.0, 1.0);
     gl_FragColor = vec4(photo, 1.0);
   }
 `;
