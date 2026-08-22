@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "meet-countdown",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-03-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "meet-countdown-db",
+      "database_id": "88830ebe-0e1d-4c6d-8a33-e58c104f84ba",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "meet-countdown-media"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COUPLE_ROOM",
+        "class_name": "CoupleRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CoupleRoom"]
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "meet.luke-xu.asia",
+      "custom_domain": true
+    }
+  ]
+}

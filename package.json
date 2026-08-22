@@ -6,7 +6,11 @@
   "type": "module",
   "scripts": {
     "start": "node --no-warnings server.mjs",
-    "dev": "node --watch --no-warnings server.mjs"
+    "dev": "node --watch --no-warnings server.mjs",
+    "dev:cloudflare": "wrangler dev --local --port 8787",
+    "types": "wrangler types src/worker-configuration.d.ts",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy --minify"
   },
   "engines": {
     "node": ">=22.5"
@@ -17,6 +21,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260822.1",
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2",
     "wrangler": "^4.125.0"
   }
 }

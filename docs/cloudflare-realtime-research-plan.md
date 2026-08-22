@@ -1,6 +1,6 @@
 # Cloudflare 实时互动版本：调研与方案设计
 
-状态：调研完成，视觉方向已按当前截图修正，等待确认后进入实现。
+状态：Phase 1/2 已完成首版实现并部署到 `meet.luke-xu.asia`，继续进行真实双端验收。
 
 视觉方向稿：[cloudflare-realtime-visual-concept-v2.png](./cloudflare-realtime-visual-concept-v2.png)
 
