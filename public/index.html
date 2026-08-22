@@ -54,25 +54,23 @@
     </main>
 
     <aside class="edge-rail edge-rail-left" id="voice-rail" aria-label="留言">
-      <button class="edge-orb" id="voice-orb" type="button" aria-expanded="false" aria-controls="voice-panel" aria-label="打开留言">
+      <div class="edge-capsules" id="voice-capsules" aria-live="polite"></div>
+      <div class="voice-recording-capsule hidden" id="voice-recording-capsule">
+        <span class="capsule-pulse" aria-hidden="true"></span><span id="record-time">0s</span><button class="capsule-stop" id="stop-voice" type="button">结束</button>
+      </div>
+      <button class="edge-orb" id="voice-orb" type="button" aria-expanded="false" aria-label="点击录音">
         <span class="edge-orb-dot" aria-hidden="true"></span><span class="edge-count" id="voice-count"></span>
       </button>
-      <section class="edge-panel glass-panel" id="voice-panel" aria-labelledby="voice-title">
-        <div class="edge-panel-heading"><h2 id="voice-title">留言</h2><span id="record-time"></span></div>
-        <div class="voice-actions"><button class="edge-action" id="record-voice" type="button">录音</button><button class="edge-action hidden" id="stop-voice" type="button">结束</button></div>
-        <div class="voice-list" id="voice-list"></div>
-      </section>
     </aside>
 
     <aside class="edge-rail edge-rail-right" id="task-rail" aria-label="清单">
-      <button class="edge-orb" id="task-orb" type="button" aria-expanded="false" aria-controls="task-panel" aria-label="打开清单">
+      <div class="edge-capsules" id="task-capsules" aria-live="polite"></div>
+      <form class="task-composer-capsule hidden" id="task-form">
+        <input id="task-input" type="text" maxlength="120" placeholder="写下一件小事" aria-label="新任务" /><button type="submit" aria-label="添加任务">＋</button>
+      </form>
+      <button class="edge-orb" id="task-orb" type="button" aria-expanded="false" aria-label="点击添加任务">
         <span class="edge-orb-ring" aria-hidden="true"></span><span class="edge-count" id="task-count"></span>
       </button>
-      <section class="edge-panel glass-panel" id="task-panel" aria-labelledby="task-title">
-        <div class="edge-panel-heading"><h2 id="task-title">清单</h2><span id="task-progress"></span></div>
-        <form class="task-form" id="task-form"><input id="task-input" type="text" maxlength="120" placeholder="写下一件小事" aria-label="新任务" /><button type="submit" aria-label="添加任务">＋</button></form>
-        <div class="task-list" id="task-list"></div>
-      </section>
     </aside>
 
     <section class="settings-dialog hidden" id="settings-dialog" aria-labelledby="settings-title" aria-hidden="true">

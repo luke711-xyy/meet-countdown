@@ -9,9 +9,8 @@ const elements = {
   chooseBackground: $('#choose-background'), fileName: $('#file-name'), removeBackground: $('#remove-background'),
   blurRange: $('#blur-range'), blurOutput: $('#blur-output'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
-  voiceList: $('#voice-list'), recordVoice: $('#record-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
-  taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskProgress: $('#task-progress'),
-  taskForm: $('#task-form'), taskInput: $('#task-input'), taskList: $('#task-list'),
+  voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
+  taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), taskInput: $('#task-input'), taskCapsules: $('#task-capsules'),
 };
 
 let state = null;
@@ -120,23 +119,28 @@ async function saveSettings(event) {
 }
 
 function makeTaskElement(task, index) {
-  const item = document.createElement('article'); item.className = 'task-card'; item.style.setProperty('--card-offset', `${(index % 3) * 6 - 6}px`);
+  const item = document.createElement('article'); item.className = 'task-capsule'; item.style.setProperty('--card-offset', `${(index % 3) * 6 - 6}px`);
   const checkbox = document.createElement('button'); checkbox.className = 'task-check'; checkbox.type = 'button'; checkbox.setAttribute('aria-label', task.completed ? '标记未完成' : '标记完成'); checkbox.setAttribute('aria-pressed', String(task.completed));
   checkbox.addEventListener('click', async () => { if (!roomId) return; try { await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: !task.completed }) }); } catch (error) { showToast(error.message); } });
   const text = document.createElement('span'); text.className = 'task-text'; text.textContent = task.text; if (task.completed) text.classList.add('is-completed');
   const meta = document.createElement('small'); meta.textContent = task.authorId === memberId ? '我' : '对方'; item.append(checkbox, text, meta); return item;
 }
 function renderTasks() {
-  const tasks = state?.tasks || []; elements.taskList.replaceChildren(...tasks.map(makeTaskElement)); const incomplete = tasks.filter((task) => !task.completed).length;
-  elements.taskCount.textContent = incomplete ? String(incomplete) : ''; elements.taskProgress.textContent = tasks.length ? `${tasks.length - incomplete}/${tasks.length}` : '';
+  const tasks = state?.tasks || []; elements.taskCapsules.replaceChildren(...tasks.map(makeTaskElement)); const incomplete = tasks.filter((task) => !task.completed).length;
+  elements.taskCount.textContent = incomplete ? String(incomplete) : '';
 }
 
 function makeVoiceElement(note) {
-  const item = document.createElement('article'); item.className = 'voice-card'; const meta = document.createElement('div'); meta.className = 'voice-meta';
-  const author = document.createElement('span'); author.textContent = note.authorId === memberId ? '我' : '对方'; const created = document.createElement('time'); created.textContent = formatShortTime(note.createdAt); meta.append(author, created);
-  const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'metadata'; audio.src = note.url; item.append(meta, audio); return item;
+  const item = document.createElement('article'); item.className = 'voice-capsule'; item.title = `${note.authorId === memberId ? '我' : '对方'} · ${formatShortTime(note.createdAt)}`;
+  const play = document.createElement('button'); play.className = 'voice-play'; play.type = 'button'; play.textContent = '▶'; play.setAttribute('aria-label', '播放留言');
+  const wave = document.createElement('span'); wave.className = 'voice-wave'; wave.setAttribute('aria-hidden', 'true');
+  const time = document.createElement('time'); time.className = 'voice-time'; time.textContent = formatShortTime(note.createdAt);
+  const audio = document.createElement('audio'); audio.preload = 'metadata'; audio.src = note.url;
+  play.addEventListener('click', async () => { try { if (audio.paused) { await audio.play(); play.textContent = 'Ⅱ'; } else { audio.pause(); play.textContent = '▶'; } } catch { showToast('无法播放这条留言'); } });
+  audio.addEventListener('ended', () => { play.textContent = '▶'; });
+  item.append(play, wave, time, audio); return item;
 }
-function renderVoiceNotes() { const notes = state?.voiceNotes || []; elements.voiceList.replaceChildren(...notes.map(makeVoiceElement)); elements.voiceCount.textContent = notes.length ? String(notes.length) : ''; }
+function renderVoiceNotes() { const notes = state?.voiceNotes || []; elements.voiceCapsules.replaceChildren(...notes.map(makeVoiceElement)); elements.voiceCount.textContent = notes.length ? String(notes.length) : ''; }
 
 function updateTaskFromEvent(task) { const item = state.tasks.find((candidate) => candidate.id === task.id); if (item) Object.assign(item, task); renderTasks(); }
 function applyRealtimeEvent(event) {
@@ -161,6 +165,7 @@ function sendPointer(x, y, strength) { if (!socket || socket.readyState !== WebS
 
 async function startRecording() {
   if (!roomId) return showToast('部署到 Cloudflare 后可使用留言');
+  if (recorder?.state === 'recording') return stopRecording();
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return showToast('当前浏览器不支持录音');
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type)) || '';
@@ -170,25 +175,39 @@ async function startRecording() {
       stream.getTracks().forEach((track) => track.stop()); const blob = new Blob(recorderChunks, { type: recorder.mimeType || 'audio/webm' });
       try { const note = await api('/api/voice', { method: 'POST', headers: { 'Content-Type': blob.type, 'X-Duration-Ms': String(Math.round(performance.now() - recorderStartedAt)) }, body: blob }); state.voiceNotes = [note, ...(state.voiceNotes || [])]; renderVoiceNotes(); } catch (error) { showToast(error.message); }
     });
-    recorder.start(); elements.recordVoice.classList.add('hidden'); elements.stopVoice.classList.remove('hidden');
+    recorder.start(); elements.voiceRail.classList.add('is-recording'); elements.voiceRecordingCapsule.classList.remove('hidden'); elements.voiceOrb.setAttribute('aria-expanded', 'true');
     recorderTimer = window.setInterval(() => { elements.recordTime.textContent = `${Math.floor((performance.now() - recorderStartedAt) / 1000)}s`; }, 250);
   } catch (error) { showToast(error.name === 'NotAllowedError' ? '请允许浏览器使用麦克风' : '无法开始录音'); }
 }
-function stopRecording() { if (recorder && recorder.state !== 'inactive') recorder.stop(); clearInterval(recorderTimer); recorderTimer = null; elements.recordTime.textContent = ''; elements.recordVoice.classList.remove('hidden'); elements.stopVoice.classList.add('hidden'); }
-function toggleRail(rail, open) { rail.classList.toggle('is-open', open ?? !rail.classList.contains('is-open')); rail.querySelector('.edge-orb')?.setAttribute('aria-expanded', String(rail.classList.contains('is-open'))); }
+function stopRecording() {
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  clearInterval(recorderTimer); recorderTimer = null; elements.recordTime.textContent = '';
+  elements.voiceRail.classList.remove('is-recording'); elements.voiceRecordingCapsule.classList.add('hidden'); elements.voiceOrb.setAttribute('aria-expanded', 'false');
+}
+function openTaskComposer() {
+  if (!roomId) return showToast('部署到 Cloudflare 后可使用清单');
+  elements.taskRail.classList.add('is-composer-active'); elements.taskComposer.classList.remove('hidden'); elements.taskOrb.setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => elements.taskInput.focus());
+}
+function closeTaskComposer() {
+  elements.taskRail.classList.remove('is-composer-active'); elements.taskComposer.classList.add('hidden'); elements.taskOrb.setAttribute('aria-expanded', 'false');
+}
+function setRailHover(rail, hovered) { rail.classList.toggle('is-hovered', hovered); }
 
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
 elements.chooseBackground.addEventListener('click', () => { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp,image/gif'; input.addEventListener('change', () => handleBackgroundFile(input.files?.[0])); input.click(); });
 elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(null, Number(elements.blurRange.value)); });
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
-elements.dialog.addEventListener('click', (event) => { if (event.target === elements.dialog) closeSettings(); }); elements.voiceOrb.addEventListener('click', () => toggleRail(elements.voiceRail)); elements.taskOrb.addEventListener('click', () => toggleRail(elements.taskRail));
-elements.recordVoice.addEventListener('click', startRecording); elements.stopVoice.addEventListener('click', stopRecording);
-elements.taskForm.addEventListener('submit', async (event) => { event.preventDefault(); const text = elements.taskInput.value.trim(); if (!text || !roomId) return; try { await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); elements.taskInput.value = ''; } catch (error) { showToast(error.message); } });
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !elements.dialog.classList.contains('hidden')) closeSettings(); });
+elements.dialog.addEventListener('click', (event) => { if (event.target === elements.dialog) closeSettings(); }); elements.voiceOrb.addEventListener('click', startRecording); elements.taskOrb.addEventListener('click', openTaskComposer);
+elements.stopVoice.addEventListener('click', stopRecording);
+elements.taskComposer.addEventListener('submit', async (event) => { event.preventDefault(); const text = elements.taskInput.value.trim(); if (!text || !roomId) return; try { await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); elements.taskInput.value = ''; closeTaskComposer(); } catch (error) { showToast(error.message); } });
+document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (elements.taskRail.classList.contains('is-composer-active')) closeTaskComposer(); else if (recorder?.state === 'recording') stopRecording(); });
 window.addEventListener('pointermove', (event) => {
   const x = event.clientX / window.innerWidth; const y = event.clientY / window.innerHeight; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
   if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
-  lastPointer = { x, y, now }; if (event.clientX < 92) toggleRail(elements.voiceRail, true); else if (event.clientX > window.innerWidth - 92) toggleRail(elements.taskRail, true); else if (event.clientX > 130) toggleRail(elements.voiceRail, false); else if (event.clientX < window.innerWidth - 130) toggleRail(elements.taskRail, false);
+  lastPointer = { x, y, now }; const rail = event.target?.closest?.('.edge-rail');
+  setRailHover(elements.voiceRail, Boolean(rail === elements.voiceRail || event.clientX < 92));
+  setRailHover(elements.taskRail, Boolean(rail === elements.taskRail || event.clientX > window.innerWidth - 92));
 }, { passive: true });
 window.addEventListener('pointerdown', (event) => water.addRipple(event.clientX / window.innerWidth, event.clientY / window.innerHeight, 0.12), { passive: true });
 

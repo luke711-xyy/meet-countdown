@@ -73,7 +73,11 @@ const backgroundFragment = `
     float vertical = texture2D(uRipple, rippleUv + vec2(0.0, uRippleTexel.y)).r - texture2D(uRipple, rippleUv - vec2(0.0, uRippleTexel.y)).r;
     vec2 photoUv = coverUv(vUv) + vec2(horizontal, vertical) * uDisplacement;
     photoUv += center * vec2(0.0007, -0.0007);
-    gl_FragColor = texture2D(uMap, clamp(photoUv, 0.001, 0.999));
+    vec3 photo = texture2D(uMap, clamp(photoUv, 0.001, 0.999)).rgb;
+    photo = pow(max(photo, vec3(0.0)), vec3(0.72));
+    photo = mix(vec3(0.58), photo, 0.68);
+    photo = clamp(photo + vec3(0.025), 0.0, 1.0);
+    gl_FragColor = vec4(photo, 1.0);
   }
 `;
 
@@ -98,6 +102,7 @@ export class WaterBackground {
       if (!this.renderer.capabilities.isWebGL2) throw new Error('WebGL2 is required for the ripple field.');
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8));
       this.renderer.setClearColor(0x000000, 0);
+      this.renderer.outputColorSpace = THREE.SRGBColorSpace;
       const quad = new THREE.PlaneGeometry(2, 2);
       this.simulation = this.createSimulation(quad);
       this.background = this.createBackground(quad);
