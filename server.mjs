@@ -20,15 +20,21 @@ db.exec(`
     target_at TEXT NOT NULL,
     background_data_url TEXT,
     blur_px INTEGER NOT NULL DEFAULT 0,
+    contrast REAL NOT NULL DEFAULT 1,
+    brightness REAL NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )
 `);
 
+const settingColumns = db.prepare('PRAGMA table_info(settings)').all();
+if (!settingColumns.some((column) => column.name === 'contrast')) db.exec('ALTER TABLE settings ADD COLUMN contrast REAL NOT NULL DEFAULT 1');
+if (!settingColumns.some((column) => column.name === 'brightness')) db.exec('ALTER TABLE settings ADD COLUMN brightness REAL NOT NULL DEFAULT 0');
+
 const initialTarget = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 if (!db.prepare('SELECT id FROM settings WHERE id = 1').get()) {
   db.prepare(`
-    INSERT INTO settings (id, target_at, background_data_url, blur_px, updated_at)
-    VALUES (1, ?, NULL, 0, ?)
+    INSERT INTO settings (id, target_at, background_data_url, blur_px, contrast, brightness, updated_at)
+    VALUES (1, ?, NULL, 0, 1, 0, ?)
   `).run(initialTarget.toISOString(), new Date().toISOString());
 }
 
@@ -54,7 +60,7 @@ function sendJson(res, status, payload) {
 
 function getSettings() {
   const row = db.prepare(`
-    SELECT target_at AS targetAt, background_data_url AS backgroundDataUrl, blur_px AS blurPx, updated_at AS updatedAt
+    SELECT target_at AS targetAt, background_data_url AS backgroundDataUrl, blur_px AS blurPx, contrast, brightness, updated_at AS updatedAt
     FROM settings WHERE id = 1
   `).get();
   return {
@@ -97,6 +103,16 @@ function validateSettings(input) {
     throw new Error('背景模糊度需要在 0 到 24 之间。');
   }
 
+  const contrast = input.contrast === undefined ? 1 : Number(input.contrast);
+  if (!Number.isFinite(contrast) || contrast < 0.75 || contrast > 1.25) {
+    throw new Error('背景对比度需要在 75% 到 125% 之间。');
+  }
+
+  const brightness = input.brightness === undefined ? 0 : Number(input.brightness);
+  if (!Number.isFinite(brightness) || brightness < -0.15 || brightness > 0.15) {
+    throw new Error('背景亮度需要在 -15% 到 15% 之间。');
+  }
+
   const backgroundDataUrl = input.backgroundDataUrl ?? null;
   if (backgroundDataUrl !== null) {
     if (typeof backgroundDataUrl !== 'string' || !/^data:image\/(jpeg|png|webp|gif);base64,[a-z0-9+/=]+$/i.test(backgroundDataUrl)) {
@@ -105,7 +121,7 @@ function validateSettings(input) {
     if (backgroundDataUrl.length > 11 * 1024 * 1024) throw new Error('背景图片请控制在 8 MB 以内。');
   }
 
-  return { targetAt: targetAt.toISOString(), blurPx, backgroundDataUrl };
+  return { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, backgroundDataUrl };
 }
 
 async function serveStatic(pathname, res) {
@@ -150,9 +166,9 @@ const server = createServer(async (req, res) => {
       const settings = validateSettings(await parseBody(req));
       db.prepare(`
         UPDATE settings
-        SET target_at = ?, background_data_url = ?, blur_px = ?, updated_at = ?
+        SET target_at = ?, background_data_url = ?, blur_px = ?, contrast = ?, brightness = ?, updated_at = ?
         WHERE id = 1
-      `).run(settings.targetAt, settings.backgroundDataUrl, settings.blurPx, new Date().toISOString());
+      `).run(settings.targetAt, settings.backgroundDataUrl, settings.blurPx, settings.contrast, settings.brightness, new Date().toISOString());
       sendJson(res, 200, getSettings());
     } catch (error) {
       sendJson(res, 400, { error: error.message });

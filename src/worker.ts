@@ -104,9 +104,9 @@ async function ensureRoom(env: Env, roomId: string) {
 
 async function roomState(env: Env, request: Request, roomId: string, memberId: string) {
   const room = await env.DB.prepare(`
-    SELECT id, target_at AS targetAt, blur_px AS blurPx, background_key AS backgroundKey, updated_at AS updatedAt
+    SELECT id, target_at AS targetAt, blur_px AS blurPx, contrast, brightness, background_key AS backgroundKey, updated_at AS updatedAt
     FROM rooms WHERE id = ?1
-  `).bind(roomId).first<{ id: string; targetAt: string; blurPx: number; backgroundKey: string | null; updatedAt: string }>();
+  `).bind(roomId).first<{ id: string; targetAt: string; blurPx: number; contrast: number; brightness: number; backgroundKey: string | null; updatedAt: string }>();
   if (!room) return null;
 
   const tasksResult = await env.DB.prepare(`
@@ -122,6 +122,8 @@ async function roomState(env: Env, request: Request, roomId: string, memberId: s
     roomId,
     targetAt: room.targetAt,
     blurPx: room.blurPx,
+    contrast: room.contrast,
+    brightness: room.brightness,
     backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}` : null,
     updatedAt: room.updatedAt,
     timeZone: 'Asia/Singapore',
@@ -159,15 +161,19 @@ async function handleRoom(request: Request, env: Env) {
 }
 
 async function handleSettings(request: Request, env: Env, roomId: string, memberId: string) {
-  const input = await bodyJson<{ targetAt?: string; blurPx?: number }>(request);
+  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number }>(request);
   const targetAt = new Date(input.targetAt || '');
   const blurPx = Number(input.blurPx);
+  const contrast = input.contrast === undefined ? 1 : Number(input.contrast);
+  const brightness = input.brightness === undefined ? 0 : Number(input.brightness);
   if (Number.isNaN(targetAt.getTime())) return json({ error: '请输入有效的见面时间。' }, 400);
   if (!Number.isInteger(blurPx) || blurPx < 0 || blurPx > 24) return json({ error: '背景模糊度需要在 0 到 24 之间。' }, 400);
+  if (!Number.isFinite(contrast) || contrast < 0.75 || contrast > 1.25) return json({ error: '背景对比度需要在 75% 到 125% 之间。' }, 400);
+  if (!Number.isFinite(brightness) || brightness < -0.15 || brightness > 0.15) return json({ error: '背景亮度需要在 -15% 到 15% 之间。' }, 400);
   const updatedAt = nowIso();
-  await env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, updated_at = ?3 WHERE id = ?4')
-    .bind(targetAt.toISOString(), blurPx, updatedAt, roomId).run();
-  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, updatedAt, actorId: memberId });
+  await env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, updated_at = ?5 WHERE id = ?6')
+    .bind(targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, roomId).run();
+  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, actorId: memberId });
   return json(await roomState(env, request, roomId, memberId));
 }
 

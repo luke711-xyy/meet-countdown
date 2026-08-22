@@ -51,6 +51,8 @@ const backgroundFragment = `
   uniform vec2 uImageAspect;
   uniform float uViewportAspect;
   uniform float uDisplacement;
+  uniform float uContrast;
+  uniform float uBrightness;
 
   vec2 coverUv(vec2 uv) {
     float viewportRatio = uViewportAspect;
@@ -75,8 +77,9 @@ const backgroundFragment = `
     photoUv += center * vec2(0.0007, -0.0007);
     vec3 photo = texture2D(uMap, clamp(photoUv, 0.001, 0.999)).rgb;
     photo = pow(max(photo, vec3(0.0)), vec3(0.86));
-    photo = vec3(0.5) + (photo - vec3(0.5)) * 0.82;
-    photo = clamp(photo + vec3(0.02), 0.0, 1.0);
+    photo = vec3(0.5) + (photo - vec3(0.5)) * 0.84;
+    photo = clamp(photo + vec3(0.03), 0.0, 1.0);
+    photo = clamp(vec3(0.5) + (photo - vec3(0.5)) * uContrast + vec3(uBrightness), 0.0, 1.0);
     gl_FragColor = vec4(photo, 1.0);
   }
 `;
@@ -93,6 +96,8 @@ export class WaterBackground {
     this.lastTime = 0;
     this.simulation = null;
     this.background = null;
+    this.contrast = 1;
+    this.brightness = 0;
     this.resizeObserver = new ResizeObserver(() => this.resize());
   }
 
@@ -152,6 +157,8 @@ export class WaterBackground {
         uImageAspect: { value: new THREE.Vector2(1, 1) },
         uViewportAspect: { value: 1 },
         uDisplacement: { value: 0.12 },
+        uContrast: { value: this.contrast },
+        uBrightness: { value: this.brightness },
       },
       vertexShader: passthroughVertex,
       fragmentShader: backgroundFragment,
@@ -192,6 +199,15 @@ export class WaterBackground {
 
   setBlur(value) {
     this.canvas.style.setProperty('--water-blur', `${Number(value) || 0}px`);
+  }
+
+  setTone(contrast = 1, brightness = 0) {
+    this.contrast = Number.isFinite(Number(contrast)) ? Number(contrast) : 1;
+    this.brightness = Number.isFinite(Number(brightness)) ? Number(brightness) : 0;
+    if (this.background) {
+      this.background.material.uniforms.uContrast.value = this.contrast;
+      this.background.material.uniforms.uBrightness.value = this.brightness;
+    }
   }
 
   addRipple(x, y, strength = 0.05) {
