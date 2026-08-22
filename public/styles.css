@@ -98,7 +98,7 @@ button { cursor: pointer; }
 .icon-button:hover, .close-button:hover { border-color: var(--line-strong); background: oklch(1 0 0 / 0.15); transform: translateY(-1px); }
 .icon-button:focus-visible, .close-button:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-.hero { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; padding: 10vh 0 7vh; text-align: center; }
+.hero { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; padding: 8vh 0 9vh; text-align: center; }
 .hero h1 { margin: 20px 0 10px; font-size: clamp(32px, 5vw, 54px); font-weight: 600; letter-spacing: -0.045em; line-height: 1.06; text-wrap: balance; }
 .target-summary { min-height: 1.5em; margin: 0; color: var(--ink-soft); font-size: 15px; }
 
@@ -110,9 +110,9 @@ button { cursor: pointer; }
   -webkit-backdrop-filter: blur(22px) saturate(125%);
 }
 
-.countdown-panel { width: min(760px, 100%); margin-top: 38px; padding: clamp(28px, 5vw, 54px) clamp(18px, 4vw, 52px) 22px; border-radius: 16px; }
-.countdown-grid { display: flex; align-items: center; justify-content: center; gap: clamp(7px, 2vw, 19px); }
-.time-unit { display: flex; min-width: 90px; flex-direction: column; gap: 10px; }
+.countdown-panel { display: grid; place-items: center; width: min(760px, 100%); margin-top: 38px; padding: clamp(24px, 3.5vw, 38px) clamp(18px, 4vw, 52px); border-radius: 16px; }
+.countdown-grid { display: flex; align-items: center; justify-content: center; width: 100%; gap: clamp(7px, 2vw, 19px); }
+.time-unit { display: flex; min-width: 90px; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
 .time-unit strong { font-variant-numeric: tabular-nums; font-size: clamp(52px, 9vw, 98px); font-weight: 500; letter-spacing: -0.065em; line-height: 0.9; }
 .time-unit span { color: var(--muted); font-size: 12px; }
 .time-separator { align-self: flex-start; padding-top: clamp(4px, 1vw, 10px); color: var(--ink-soft); font-size: clamp(25px, 4vw, 46px); font-weight: 300; }
@@ -206,9 +206,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
 @media (max-width: 640px) {
   .app-shell { padding: 20px 16px 20px; }
-  .hero { padding: 9vh 0 6vh; }
+  .hero { padding: 7vh 0 8vh; }
   .hero h1 { margin-top: 18px; font-size: 34px; }
-  .countdown-panel { margin-top: 30px; padding: 35px 9px 20px; }
+  .countdown-panel { margin-top: 30px; padding: 24px 9px; }
   .countdown-grid { gap: 3px; }
   .time-unit { min-width: 0; flex: 1; gap: 8px; }
   .time-unit strong { font-size: clamp(38px, 13vw, 68px); letter-spacing: -0.07em; }
