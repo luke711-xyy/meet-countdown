@@ -1,0 +1,10 @@
+data/*.sqlite
+.playwright-cli/
+output/playwright/
+node_modules/
+output/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example

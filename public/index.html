@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#15202a" />
+    <title>见面倒计时</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css?v=3" />
+  </head>
+  <body>
+    <div class="background-layer" aria-hidden="true"></div>
+    <canvas class="water-canvas" id="water-canvas" aria-hidden="true"></canvas>
+    <div class="background-wash" aria-hidden="true"></div>
+    <canvas class="html-canvas-probe" id="html-canvas-probe" layoutsubtree aria-hidden="true"><div id="html-canvas-probe-content"> </div></canvas>
+
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">⌁</span>
+          <div>
+            <p class="brand-name">见面倒计时</p>
+          </div>
+        </div>
+        <button class="icon-button" id="open-settings" type="button" aria-label="打开设置" title="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </header>
+
+      <section class="hero" aria-labelledby="countdown-heading">
+        <h1 id="countdown-heading">距离下一次见面</h1>
+        <p class="target-summary" id="target-summary"></p>
+
+        <div class="countdown-panel glass-panel">
+          <div class="countdown-grid" id="countdown" aria-live="polite" aria-atomic="true">
+            <div class="time-unit"><strong id="days">—</strong><span>天</span></div>
+            <div class="time-separator" aria-hidden="true">:</div>
+            <div class="time-unit"><strong id="hours">—</strong><span>小时</span></div>
+            <div class="time-separator" aria-hidden="true">:</div>
+            <div class="time-unit"><strong id="minutes">—</strong><span>分钟</span></div>
+            <div class="time-separator" aria-hidden="true">:</div>
+            <div class="time-unit"><strong id="seconds">—</strong><span>秒</span></div>
+          </div>
+        </div>
+
+        <p class="current-time" id="current-time">现在是 —</p>
+      </section>
+
+      <footer class="footer-note">
+        <span>把想念留给时间</span>
+        <span class="footer-separator">·</span>
+        <span id="timezone-label">本地时间</span>
+      </footer>
+    </main>
+
+    <aside class="edge-rail edge-rail-left" id="voice-rail" aria-label="留言">
+      <button class="edge-orb" id="voice-orb" type="button" aria-expanded="false" aria-controls="voice-panel" aria-label="打开留言">
+        <span class="edge-orb-dot" aria-hidden="true"></span><span class="edge-count" id="voice-count"></span>
+      </button>
+      <section class="edge-panel glass-panel" id="voice-panel" aria-labelledby="voice-title">
+        <div class="edge-panel-heading"><h2 id="voice-title">留言</h2><span id="record-time"></span></div>
+        <div class="voice-actions"><button class="edge-action" id="record-voice" type="button">录音</button><button class="edge-action hidden" id="stop-voice" type="button">结束</button></div>
+        <div class="voice-list" id="voice-list"></div>
+      </section>
+    </aside>
+
+    <aside class="edge-rail edge-rail-right" id="task-rail" aria-label="清单">
+      <button class="edge-orb" id="task-orb" type="button" aria-expanded="false" aria-controls="task-panel" aria-label="打开清单">
+        <span class="edge-orb-ring" aria-hidden="true"></span><span class="edge-count" id="task-count"></span>
+      </button>
+      <section class="edge-panel glass-panel" id="task-panel" aria-labelledby="task-title">
+        <div class="edge-panel-heading"><h2 id="task-title">清单</h2><span id="task-progress"></span></div>
+        <form class="task-form" id="task-form"><input id="task-input" type="text" maxlength="120" placeholder="写下一件小事" aria-label="新任务" /><button type="submit" aria-label="添加任务">＋</button></form>
+        <div class="task-list" id="task-list"></div>
+      </section>
+    </aside>
+
+    <section class="settings-dialog hidden" id="settings-dialog" aria-labelledby="settings-title" aria-hidden="true">
+      <form class="settings-sheet" id="settings-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="section-kicker">CUSTOMIZE</p>
+            <h2 id="settings-title">把这段等待，放在你的照片里</h2>
+          </div>
+          <button class="close-button" id="close-settings" type="button" aria-label="关闭设置">×</button>
+        </div>
+
+        <div class="form-field">
+          <label for="target-at">下次见面时间</label>
+          <input id="target-at" name="targetAt" type="datetime-local" required />
+          <p class="field-hint">时间会按这台设备的本地时区保存。</p>
+        </div>
+
+        <div class="form-field">
+          <div class="label-row"><label>倒计时背景</label><span id="file-name">默认背景</span></div>
+          <button class="upload-box" id="choose-background" type="button">
+            <span class="upload-icon" aria-hidden="true">＋</span>
+            <span>选择一张照片</span>
+            <small>JPG、PNG、WEBP 或 GIF · 最大 8 MB</small>
+          </button>
+          <button class="text-button hidden" id="remove-background" type="button">移除自定义背景</button>
+        </div>
+
+        <div class="form-field">
+          <div class="label-row"><label for="blur-range">背景模糊度</label><output id="blur-output" for="blur-range">0 px</output></div>
+          <input id="blur-range" type="range" min="0" max="24" value="0" step="1" />
+          <div class="range-labels"><span>清晰</span><span>柔和</span></div>
+        </div>
+
+        <div class="dialog-actions">
+          <p class="save-status" id="save-status" role="status"></p>
+          <button class="primary-button" id="save-settings" value="default" type="submit">保存设置</button>
+        </div>
+      </form>
+    </section>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js?v=4"></script>
+  </body>
+</html>
