@@ -229,11 +229,18 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
 
   const tasksResult = await env.DB.prepare(`
     SELECT id, text, completed, author_id AS authorId, completed_by AS completedBy, created_at AS createdAt, updated_at AS updatedAt
-    FROM tasks WHERE room_id = ?1 ORDER BY completed ASC, updated_at DESC
+    FROM tasks WHERE room_id = ?1 ORDER BY created_at ASC, id ASC
   `).bind(roomId).all();
   const voiceResult = await env.DB.prepare(`
     SELECT id, author_id AS authorId, mime_type AS mimeType, duration_ms AS durationMs, created_at AS createdAt
-    FROM voice_notes WHERE room_id = ?1 ORDER BY created_at DESC LIMIT 40
+    FROM (
+      SELECT id, author_id, mime_type, duration_ms, created_at
+      FROM voice_notes
+      WHERE room_id = ?1
+      ORDER BY created_at DESC, id DESC
+      LIMIT 40
+    )
+    ORDER BY createdAt ASC, id ASC
   `).bind(roomId).all();
   const membersResult = await env.DB.prepare(`
     SELECT users.id AS id, users.username AS username, room_members.slot AS slot

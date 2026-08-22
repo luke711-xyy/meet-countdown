@@ -197,7 +197,7 @@ function makeTaskElement(task, index) {
   item.append(checkbox, text); return item;
 }
 function renderTasks() {
-  const tasks = state?.tasks || []; const theirs = tasks.filter((task) => task.authorId !== memberId); const mine = tasks.filter((task) => task.authorId === memberId);
+  const tasks = [...(state?.tasks || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id))); const theirs = tasks.filter((task) => task.authorId !== memberId); const mine = tasks.filter((task) => task.authorId === memberId);
   elements.taskListTheirs.replaceChildren(...theirs.map(makeTaskElement)); elements.taskListMine.replaceChildren(...mine.map((task, index) => makeTaskElement(task, index)));
   const incomplete = tasks.filter((task) => !task.completed).length;
   elements.taskCount.textContent = incomplete ? String(incomplete) : '';
@@ -225,7 +225,7 @@ function makeVoiceElement(note) {
   item.append(play, wave, time, audio); return item;
 }
 function stopActiveVoice() { if (!activeAudio) return; activeAudio.pause(); activeAudio.currentTime = 0; activeVoiceItem?.classList.remove('is-playing'); if (activeVoicePlay) activeVoicePlay.textContent = '▶'; activeAudio = null; activeVoiceItem = null; activeVoicePlay = null; }
-function renderVoiceNotes() { stopActiveVoice(); const notes = state?.voiceNotes || []; elements.voiceCapsules.replaceChildren(...notes.map(makeVoiceElement)); elements.voiceCount.textContent = notes.length ? String(notes.length) : ''; }
+function renderVoiceNotes() { stopActiveVoice(); const notes = [...(state?.voiceNotes || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id))); elements.voiceCapsules.replaceChildren(...notes.map(makeVoiceElement)); elements.voiceCount.textContent = notes.length ? String(notes.length) : ''; }
 
 async function syncEphemeralState() {
   if (!roomId || !state) return;
@@ -246,10 +246,10 @@ function applyRealtimeEvent(event) {
   if (event.type === 'pointer') window.setTimeout(() => water.addRipple(payload.x, payload.y, Number(payload.strength || 0.04) * 0.72), 110);
   else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 0; elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
   else if (event.type === 'background.updated') { state.backgroundUrl = payload.backgroundUrl; state.backgroundDataUrl = null; setBackground(currentBackground(), state.blurPx); }
-  else if (event.type === 'task.created') { state.tasks = [payload, ...(state.tasks || []).filter((task) => task.id !== payload.id)]; renderTasks(); }
+  else if (event.type === 'task.created') { state.tasks = [...(state.tasks || []).filter((task) => task.id !== payload.id), payload]; renderTasks(); }
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);
   else if (event.type === 'task.deleted') { state.tasks = state.tasks.filter((task) => task.id !== payload.id); renderTasks(); }
-  else if (event.type === 'voice.created') { state.voiceNotes = [payload, ...(state.voiceNotes || []).filter((note) => note.id !== payload.id)]; renderVoiceNotes(); }
+  else if (event.type === 'voice.created') { state.voiceNotes = [...(state.voiceNotes || []).filter((note) => note.id !== payload.id), payload]; renderVoiceNotes(); }
   else if (event.type === 'voice.deleted') { state.voiceNotes = (state.voiceNotes || []).filter((note) => note.id !== payload.id); renderVoiceNotes(); }
   else if (event.type === 'room.joined') { state.members = [...(state.members || []).filter((member) => member.id !== payload.userId), { id: payload.userId, username: payload.username, slot: payload.slot }].sort((a, b) => a.slot - b.slot); elements.roomMembers.textContent = `${state.members.length} / 2`; showToast(`${payload.username || '对方'} 已加入房间`); }
   else if (event.type === 'room.destroyed') { state = null; socket?.close(); socket = null; showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
@@ -281,7 +281,7 @@ async function startRecording() {
       if (recordingSession === session) recordingSession = null;
       if (recorder === activeRecorder) recorder = null;
       if (!shouldUpload) return;
-      try { const note = await api('/api/voice', { method: 'POST', headers: { 'Content-Type': blob.type, 'X-Duration-Ms': String(Math.round(performance.now() - session.startedAt)) }, body: blob }); state.voiceNotes = [note, ...(state.voiceNotes || []).filter((existing) => existing.id !== note.id)]; renderVoiceNotes(); } catch (error) { showToast(error.message); }
+      try { const note = await api('/api/voice', { method: 'POST', headers: { 'Content-Type': blob.type, 'X-Duration-Ms': String(Math.round(performance.now() - session.startedAt)) }, body: blob }); state.voiceNotes = [...(state.voiceNotes || []).filter((existing) => existing.id !== note.id), note]; renderVoiceNotes(); } catch (error) { showToast(error.message); }
     });
     activeRecorder.start(); elements.voiceRail.classList.add('is-recording'); elements.voiceRecordingCapsule.classList.remove('hidden'); elements.voiceOrb.setAttribute('aria-expanded', 'true');
     recorderTimer = window.setInterval(() => { elements.recordTime.textContent = `${Math.floor((performance.now() - recorderStartedAt) / 1000)}s`; }, 250);
