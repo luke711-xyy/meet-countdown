@@ -71,11 +71,12 @@ button { cursor: pointer; }
 
 .water-canvas {
   z-index: 0;
-  width: calc(100% + 56px);
-  height: calc(100% + 56px);
+  inset: 0;
+  width: 100%;
+  height: 100%;
   opacity: 0;
   filter: blur(var(--water-blur, 0px));
-  transform: scale(1.04);
+  transform: none;
   transition: opacity 260ms var(--ease-out), filter 240ms var(--ease-out);
 }
 .water-canvas.water-ready { opacity: 1; }
