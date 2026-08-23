@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#15202a" />
     <title>见面倒计时</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css?v=9" />
+    <link rel="stylesheet" href="/styles.css?v=10" />
   </head>
   <body>
     <section class="auth-gate" id="auth-gate" aria-labelledby="auth-title">
@@ -112,9 +112,13 @@
     <section class="settings-dialog hidden" id="settings-dialog" aria-labelledby="settings-title" aria-hidden="true">
       <form class="settings-sheet" id="settings-form">
         <div class="dialog-heading">
-          <div>
-            <p class="section-kicker">CUSTOMIZE</p>
-            <h2 id="settings-title">把这段等待，放在你的照片里</h2>
+          <div class="theme-control">
+            <h2 id="settings-title" class="sr-only">设置</h2>
+            <div class="label-row"><span class="theme-label">文字主题</span><output id="theme-output">浅色</output></div>
+            <div class="theme-options" role="group" aria-label="文字主题">
+              <button class="theme-option is-active" id="theme-light" type="button" data-theme="light" aria-pressed="true">浅色</button>
+              <button class="theme-option" id="theme-dark" type="button" data-theme="dark" aria-pressed="false">深色</button>
+            </div>
           </div>
           <button class="close-button" id="close-settings" type="button" aria-label="关闭设置">×</button>
         </div>
@@ -180,6 +184,6 @@
     <div class="context-menu hidden" id="context-menu" role="menu">
       <button id="context-delete" type="button" role="menuitem">删除</button>
     </div>
-    <script type="module" src="/app.js?v=10"></script>
+    <script type="module" src="/app.js?v=11"></script>
   </body>
 </html>

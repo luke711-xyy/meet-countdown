@@ -9,7 +9,7 @@ const elements = {
   days: $('#days'), hours: $('#hours'), minutes: $('#minutes'), seconds: $('#seconds'), currentTime: $('#current-time'), slogan: $('#slogan'),
   timezoneLabel: $('#timezone-label'), dialog: $('#settings-dialog'), form: $('#settings-form'), targetAt: $('#target-at'),
   chooseBackground: $('#choose-background'), fileName: $('#file-name'), removeBackground: $('#remove-background'),
-  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), sloganInput: $('#slogan-input'), sloganCount: $('#slogan-count'), brushColor: $('#brush-color'), brushColorOutput: $('#brush-color-output'), saveStatus: $('#save-status'),
+  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), sloganInput: $('#slogan-input'), sloganCount: $('#slogan-count'), brushColor: $('#brush-color'), brushColorOutput: $('#brush-color-output'), themeOutput: $('#theme-output'), themeLight: $('#theme-light'), themeDark: $('#theme-dark'), saveStatus: $('#save-status'),
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
   voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), cancelVoice: $('#cancel-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
   taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), cancelTask: $('#cancel-task'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
@@ -25,6 +25,7 @@ let authMode = 'login';
 let selectedBackground = null;
 let selectedBackgroundFile = null;
 let backgroundSelection = 'unchanged';
+let selectedTheme = 'light';
 let toastTimer = null;
 let socket = null;
 let recorder = null;
@@ -51,6 +52,17 @@ function formatShortTime(iso) { return new Intl.DateTimeFormat('zh-CN', { month:
 function toInputValue(iso) { const date = new Date(iso); const offset = date.getTimezoneOffset() * 60000; return new Date(date.getTime() - offset).toISOString().slice(0, 16); }
 function customBackground() { return state?.backgroundDataUrl || state?.backgroundUrl || null; }
 function currentBackground() { return customBackground() || DEFAULT_BACKGROUND; }
+function normalizeTheme(value) { return value === 'dark' ? 'dark' : 'light'; }
+function applyTheme(value = 'light') {
+  selectedTheme = normalizeTheme(value);
+  document.documentElement.dataset.theme = selectedTheme;
+  const isDark = selectedTheme === 'dark';
+  elements.themeLight.classList.toggle('is-active', !isDark);
+  elements.themeDark.classList.toggle('is-active', isDark);
+  elements.themeLight.setAttribute('aria-pressed', String(!isDark));
+  elements.themeDark.setAttribute('aria-pressed', String(isDark));
+  elements.themeOutput.textContent = isDark ? '深色' : '浅色';
+}
 
 function setBackground(source, blurPx, contrast = Number.isFinite(Number(elements.contrastRange?.value)) ? Number(elements.contrastRange.value) : 1, brightness = Number.isFinite(Number(elements.brightnessRange?.value)) ? Number(elements.brightnessRange.value) : 1) {
   elements.background.style.backgroundImage = source ? `url("${source}")` : '';
@@ -212,7 +224,7 @@ async function api(path, options = {}) {
 
 async function loadState() {
   try {
-    state = await api('/api/state'); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
+    state = await api('/api/state'); applyTheme(state.theme); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
     setBrushSettings(state.brushColor); doodle.hydrate(state.doodles || [], memberId); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
   } catch (error) { elements.targetSummary.textContent = '请确认后端服务正在运行'; console.error(error); }
 }
@@ -220,6 +232,7 @@ async function loadState() {
 function openSettings() {
   if (!state) return;
   elements.saveStatus.textContent = '';
+  applyTheme(state.theme);
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels();
   elements.sloganInput.value = state.slogan ?? '把想念留给时间'; elements.sloganCount.textContent = `${elements.sloganInput.value.length}/20`;
   setBrushSettings(state.brushColor);
@@ -249,11 +262,11 @@ async function saveSettings(event) {
       if (roomId) {
         if (backgroundSelection === 'upload' && selectedBackgroundFile) await api('/api/background', { method: 'PUT', headers: { 'Content-Type': selectedBackgroundFile.type }, body: selectedBackgroundFile });
         else if (backgroundSelection === 'remove') await api('/api/background', { method: 'DELETE' });
-        state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: 'neon' }) });
+        state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: 'neon', theme: selectedTheme }) });
       } else {
-        state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: 'neon' }) });
+        state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: 'neon', theme: selectedTheme }) });
       }
-      elements.saveStatus.textContent = ''; setBrushSettings(state.brushColor); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; hideSettings(); showToast('设置已保存'); render();
+      elements.saveStatus.textContent = ''; applyTheme(state.theme); setBrushSettings(state.brushColor); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; hideSettings(); showToast('设置已保存'); render();
     } catch (error) {
       elements.saveStatus.textContent = error.message;
     } finally {
@@ -439,6 +452,8 @@ elements.contrastRange.addEventListener('input', () => { updateToneLabels(); wat
 elements.brightnessRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
 elements.sloganInput.addEventListener('input', () => { elements.sloganCount.textContent = `${elements.sloganInput.value.length}/20`; });
 elements.brushColor.addEventListener('input', () => { elements.brushColorOutput.textContent = elements.brushColor.value.toUpperCase(); doodle.configure({ color: elements.brushColor.value }); });
+elements.themeLight.addEventListener('click', () => applyTheme('light'));
+elements.themeDark.addEventListener('click', () => applyTheme('dark'));
 elements.chooseBackground.addEventListener('click', () => { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp,image/gif'; input.addEventListener('change', () => handleBackgroundFile(input.files?.[0])); input.click(); });
 elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(DEFAULT_BACKGROUND, Number(elements.blurRange.value)); });
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);

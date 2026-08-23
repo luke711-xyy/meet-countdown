@@ -16,6 +16,20 @@
   color: var(--ink);
 }
 
+:root[data-theme="dark"] {
+  --ink: oklch(0.18 0.025 220);
+  --ink-soft: oklch(0.28 0.035 220);
+  --muted: oklch(0.43 0.04 220);
+  --primary: oklch(0.48 0.09 210);
+  --accent: oklch(0.48 0.16 242);
+  --surface: oklch(1 0 0 / 0.38);
+  --surface-strong: oklch(0.96 0.015 220 / 0.58);
+  --line: oklch(0.16 0.03 220 / 0.22);
+  --line-strong: oklch(0.16 0.03 220 / 0.34);
+  --shadow: 0 8px 24px oklch(0 0 0 / 0.14);
+  color-scheme: light;
+}
+
 * { box-sizing: border-box; }
 
 html, body { min-height: 100%; }
@@ -151,9 +165,15 @@ button { cursor: pointer; }
 .settings-dialog { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; width: 100%; height: 100%; padding: 12px; background: linear-gradient(180deg, oklch(0.55 0.14 240 / 0.18), oklch(0.08 0.04 250 / 0.36)); backdrop-filter: blur(18px) saturate(125%); -webkit-backdrop-filter: blur(18px) saturate(125%); }
 .settings-dialog.hidden { display: none; }
 .settings-sheet { --ink: oklch(0.18 0.035 242); --ink-soft: oklch(0.28 0.045 240); --muted: oklch(0.44 0.055 238); --accent: oklch(0.58 0.17 245); --line: oklch(0.25 0.07 242 / 0.18); --line-strong: oklch(0.28 0.08 242 / 0.3); width: min(520px, 100%); max-height: calc(100svh - 24px); overflow-y: auto; padding: 24px; border: 1px solid oklch(1 0 0 / 0.62); border-radius: 18px; color: var(--ink); background: linear-gradient(135deg, oklch(1 0 0 / 0.74), oklch(0.86 0.045 235 / 0.55)); box-shadow: 0 12px 32px oklch(0.08 0.04 245 / 0.24), inset 0 1px 0 oklch(1 0 0 / 0.72); backdrop-filter: blur(32px) saturate(135%); -webkit-backdrop-filter: blur(32px) saturate(135%); }
-.dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+.dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .section-kicker { margin: 0 0 8px; color: var(--accent); font-size: 10px; letter-spacing: 0.14em; }
 .dialog-heading h2 { max-width: 340px; margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.04em; line-height: 1.1; text-wrap: balance; }
+.theme-control { min-width: 0; flex: 1; }
+.theme-label { color: var(--ink-soft); font-size: 13px; }
+.theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-width: 232px; margin-top: 7px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: oklch(1 0 0 / 0.24); }
+.theme-option { padding: 7px 12px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font-size: 11px; transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease; }
+.theme-option.is-active { color: var(--ink); background: oklch(1 0 0 / 0.58); box-shadow: 0 2px 8px oklch(0.15 0.03 240 / 0.1), inset 0 1px 0 oklch(1 0 0 / 0.48); }
+.theme-option:hover { color: var(--ink); }
 .close-button { width: 31px; height: 31px; padding-bottom: 2px; border-radius: 50%; font-size: 24px; font-weight: 300; line-height: 1; }
 .form-field { margin-top: 16px; }
 .form-field label, .label-row { color: var(--ink-soft); font-size: 13px; }
@@ -250,6 +270,49 @@ input[type="color"] { display: block; width: 100%; height: 38px; padding: 3px; b
 .task-composer-capsule .capsule-cancel { width: auto; padding: 0 8px; border-radius: 999px; font-size: 10px; }
 @keyframes capsule-pulse { 0%, 100% { opacity: 0.62; transform: scale(0.86); } 50% { opacity: 1; transform: scale(1.1); } }
 @keyframes voice-wave { from { transform: scaleY(0.45); opacity: 0.56; } to { transform: scaleY(1.12); opacity: 1; } }
+
+:root[data-theme="dark"] .brand-mark,
+:root[data-theme="dark"] .brand-name,
+:root[data-theme="dark"] .account-name,
+:root[data-theme="dark"] .hero h1,
+:root[data-theme="dark"] .target-summary,
+:root[data-theme="dark"] .time-unit strong,
+:root[data-theme="dark"] .time-unit span,
+:root[data-theme="dark"] .time-separator,
+:root[data-theme="dark"] .current-time,
+:root[data-theme="dark"] .footer-note,
+:root[data-theme="dark"] .edge-orb,
+:root[data-theme="dark"] .edge-count,
+:root[data-theme="dark"] .voice-capsule,
+:root[data-theme="dark"] .task-capsule,
+:root[data-theme="dark"] .voice-recording-capsule,
+:root[data-theme="dark"] .task-composer-capsule {
+  text-shadow: 0 1px 12px oklch(1 0 0 / 0.42);
+}
+
+:root[data-theme="dark"] .glass-panel {
+  background: linear-gradient(135deg, oklch(1 0 0 / 0.38), oklch(1 0 0 / 0.2));
+}
+
+:root[data-theme="dark"] .voice-capsule,
+:root[data-theme="dark"] .task-capsule,
+:root[data-theme="dark"] .voice-recording-capsule,
+:root[data-theme="dark"] .task-composer-capsule {
+  border-color: oklch(0.16 0.03 220 / 0.22);
+  background-color: oklch(1 0 0 / 0.34);
+  background-image: linear-gradient(135deg, oklch(1 0 0 / 0.46), oklch(1 0 0 / 0.2));
+  box-shadow: 0 7px 8px oklch(0 0 0 / 0.1), inset 0 1px 0 oklch(1 0 0 / 0.58);
+}
+
+:root[data-theme="dark"] .edge-orb {
+  border-color: oklch(0.16 0.03 220 / 0.24);
+  background: oklch(1 0 0 / 0.24);
+  box-shadow: 0 8px 22px oklch(0 0 0 / 0.1), inset 0 1px 0 oklch(1 0 0 / 0.54);
+}
+
+:root[data-theme="dark"] .task-divider {
+  background: linear-gradient(90deg, transparent 0%, oklch(0.16 0.03 220 / 0.08) 14%, oklch(0.16 0.03 220 / 0.56) 30%, oklch(0.16 0.03 220 / 0.56) 70%, oklch(0.16 0.03 220 / 0.08) 86%, transparent 100%);
+}
 
 @media (max-width: 640px) {
   .app-shell { padding: 20px 16px 20px; }

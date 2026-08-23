@@ -247,8 +247,8 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
   const membership = await roomMember(env, roomId, user.id);
   if (!membership) return null;
 
-  const brushSettings = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle FROM users WHERE id = ?1')
-    .bind(user.id).first<{ brushColor: string; brushStyle: string }>();
+  const brushSettings = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle, theme FROM users WHERE id = ?1')
+    .bind(user.id).first<{ brushColor: string; brushStyle: string; theme: string }>();
 
   const tasksResult = await env.DB.prepare(`
     SELECT id, text, completed, author_id AS authorId, completed_by AS completedBy, created_at AS createdAt, updated_at AS updatedAt
@@ -284,6 +284,7 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     contrast: room.contrast,
     brightness: room.brightness,
     slogan: room.slogan ?? '把想念留给时间',
+    theme: brushSettings?.theme === 'dark' ? 'dark' : 'light',
     brushColor: brushSettings?.brushColor || '#8be9fd',
     brushStyle: 'neon',
     backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}&v=${encodeURIComponent(room.updatedAt)}` : null,
@@ -371,17 +372,18 @@ async function destroyRoom(env: Env, roomId: string, user: AuthUser) {
 }
 
 async function handleSettings(request: Request, env: Env, roomId: string, user: AuthUser) {
-  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number; slogan?: string; brushColor?: string; brushStyle?: string }>(request);
+  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number; slogan?: string; brushColor?: string; brushStyle?: string; theme?: string }>(request);
   const targetAt = new Date(input.targetAt || '');
   const blurPx = Number(input.blurPx);
   const contrast = input.contrast === undefined ? 1 : Number(input.contrast);
   const brightness = input.brightness === undefined ? 1 : Number(input.brightness);
   const currentSlogan = await env.DB.prepare('SELECT slogan FROM rooms WHERE id = ?1').bind(roomId).first<{ slogan: string }>();
   const slogan = input.slogan === undefined ? (currentSlogan?.slogan || '把想念留给时间') : String(input.slogan).trim();
-  const currentBrush = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle FROM users WHERE id = ?1')
-    .bind(user.id).first<{ brushColor: string; brushStyle: string }>();
+  const currentBrush = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle, theme FROM users WHERE id = ?1')
+    .bind(user.id).first<{ brushColor: string; brushStyle: string; theme: string }>();
   const brushColor = input.brushColor === undefined ? (currentBrush?.brushColor || '#8be9fd') : String(input.brushColor);
   const brushStyle = 'neon';
+  const theme = input.theme === undefined ? (currentBrush?.theme === 'dark' ? 'dark' : 'light') : (input.theme === 'dark' ? 'dark' : 'light');
   if (Number.isNaN(targetAt.getTime())) return json({ error: '请输入有效的见面时间。' }, 400);
   if (!Number.isInteger(blurPx) || blurPx < 0 || blurPx > 24) return json({ error: '背景模糊度需要在 0 到 24 之间。' }, 400);
   if (!Number.isFinite(contrast) || contrast < 0 || contrast > 2) return json({ error: '背景对比度需要在 0% 到 200% 之间。' }, 400);
@@ -393,8 +395,8 @@ async function handleSettings(request: Request, env: Env, roomId: string, user: 
   await env.DB.batch([
     env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, slogan = ?5, updated_at = ?6 WHERE id = ?7')
       .bind(targetAt.toISOString(), blurPx, contrast, brightness, slogan, updatedAt, roomId),
-    env.DB.prepare('UPDATE users SET brush_color = ?1, brush_style = ?2 WHERE id = ?3')
-      .bind(brushColor, brushStyle, user.id),
+    env.DB.prepare('UPDATE users SET brush_color = ?1, brush_style = ?2, theme = ?3 WHERE id = ?4')
+      .bind(brushColor, brushStyle, theme, user.id),
   ]);
   await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, slogan, brushColor, brushStyle, updatedAt, actorId: user.id });
   return json(await roomState(env, request, roomId, user));
