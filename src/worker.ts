@@ -285,7 +285,7 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     brightness: room.brightness,
     brushColor: brushSettings?.brushColor || '#8be9fd',
     brushStyle: validDoodleStyle(brushSettings?.brushStyle) ? brushSettings.brushStyle : 'neon',
-    backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}` : null,
+    backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}&v=${encodeURIComponent(room.updatedAt)}` : null,
     updatedAt: room.updatedAt,
     timeZone: 'Asia/Singapore',
     memberId: user.id,
