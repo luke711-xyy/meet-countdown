@@ -1,0 +1,2 @@
+ALTER TABLE rooms ADD COLUMN task_retention_days INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE rooms ADD COLUMN voice_retention_days INTEGER NOT NULL DEFAULT 1;

@@ -22,6 +22,9 @@ const ROOM_PATTERN = /^room_[a-z0-9]{10}$/;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 const MAX_DOODLE_POINTS = 800;
+const MAX_TASKS_PER_ROOM = 100;
+const MAX_VOICE_NOTES_PER_ROOM = 200;
+const MAX_RETENTION_DAYS = 36500;
 const DOODLE_STYLES = new Set(['neon', 'fireworks']);
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const AUTH_COOKIE = 'meet_auth';
@@ -32,29 +35,67 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-async function listVoiceObjectKeys(env: Env) {
-  const keys: string[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await env.MEDIA.list({ prefix: 'rooms/', cursor });
-    keys.push(...page.objects.map((object) => object.key).filter((key) => key.includes('/voice/')));
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
-  return keys;
+function validRetentionDays(value: unknown) {
+  return Number.isInteger(value) && (value === 0 || (value >= 1 && value <= MAX_RETENTION_DAYS));
+}
+
+async function cleanupRoomEphemeral(env: Env, roomId: string, taskRetentionDays: number, voiceRetentionDays: number, now = Date.now()) {
+  const taskCutoff = taskRetentionDays > 0 ? new Date(now - taskRetentionDays * 24 * 60 * 60 * 1000).toISOString() : null;
+  const voiceCutoff = voiceRetentionDays > 0 ? new Date(now - voiceRetentionDays * 24 * 60 * 60 * 1000).toISOString() : null;
+  const [expiredTasks, overflowTasks, expiredVoices, overflowVoices] = await Promise.all([
+    taskCutoff
+      ? env.DB.prepare('SELECT id FROM tasks WHERE room_id = ?1 AND created_at < ?2').bind(roomId, taskCutoff).all<{ id: string }>()
+      : Promise.resolve({ results: [] as { id: string }[] }),
+    env.DB.prepare('SELECT id FROM tasks WHERE room_id = ?1 ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?2').bind(roomId, MAX_TASKS_PER_ROOM).all<{ id: string }>(),
+    voiceCutoff
+      ? env.DB.prepare('SELECT id, object_key AS objectKey FROM voice_notes WHERE room_id = ?1 AND created_at < ?2').bind(roomId, voiceCutoff).all<{ id: string; objectKey: string }>()
+      : Promise.resolve({ results: [] as { id: string; objectKey: string }[] }),
+    env.DB.prepare('SELECT id, object_key AS objectKey FROM voice_notes WHERE room_id = ?1 ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?2').bind(roomId, MAX_VOICE_NOTES_PER_ROOM).all<{ id: string; objectKey: string }>(),
+  ]);
+
+  const taskIds = [...new Set([...(expiredTasks.results || []), ...(overflowTasks.results || [])].map((task) => task.id))];
+  const voiceRows = [...(expiredVoices.results || []), ...(overflowVoices.results || [])];
+  const voiceById = new Map(voiceRows.map((voice) => [voice.id, voice]));
+  const voiceIds = [...voiceById.keys()];
+  await Promise.all([...voiceById.values()].map((voice) => env.MEDIA.delete(voice.objectKey)));
+  const statements = [
+    ...taskIds.map((id) => env.DB.prepare('DELETE FROM tasks WHERE id = ?1 AND room_id = ?2').bind(id, roomId)),
+    ...voiceIds.map((id) => env.DB.prepare('DELETE FROM voice_notes WHERE id = ?1 AND room_id = ?2').bind(id, roomId)),
+  ];
+  if (statements.length) await env.DB.batch(statements);
+  return { taskIds, voiceIds, voiceObjects: voiceIds };
+}
+
+async function roomRetention(env: Env, roomId: string) {
+  return env.DB.prepare('SELECT task_retention_days AS taskRetentionDays, voice_retention_days AS voiceRetentionDays FROM rooms WHERE id = ?1')
+    .bind(roomId).first<{ taskRetentionDays: number; voiceRetentionDays: number }>();
+}
+
+async function cleanupRoomAndBroadcast(env: Env, roomId: string) {
+  const retention = await roomRetention(env, roomId);
+  if (!retention) return { taskIds: [], voiceIds: [], voiceObjects: [] };
+  const result = await cleanupRoomEphemeral(env, roomId, Number(retention.taskRetentionDays), Number(retention.voiceRetentionDays));
+  if (result.taskIds.length || result.voiceIds.length) {
+    await broadcast(env, roomId, 'ephemeral.cleared', { clearedAt: nowIso(), taskIds: result.taskIds, voiceIds: result.voiceIds });
+  }
+  return result;
 }
 
 async function clearEphemeralData(env: Env) {
-  const voiceObjectKeys = await listVoiceObjectKeys(env);
-  await Promise.all(voiceObjectKeys.map((key) => env.MEDIA.delete(key)));
-  await env.DB.batch([
-    env.DB.prepare('DELETE FROM voice_notes'),
-    env.DB.prepare('DELETE FROM tasks'),
-  ]);
-
-  const rooms = await env.DB.prepare('SELECT id FROM rooms').all<{ id: string }>();
-  const clearedAt = nowIso();
-  await Promise.all((rooms.results || []).map((room) => broadcast(env, room.id, 'ephemeral.cleared', { clearedAt })));
-  return { clearedAt, voiceObjects: voiceObjectKeys.length, rooms: rooms.results?.length || 0 };
+  const rooms = await env.DB.prepare('SELECT id, task_retention_days AS taskRetentionDays, voice_retention_days AS voiceRetentionDays FROM rooms')
+    .all<{ id: string; taskRetentionDays: number; voiceRetentionDays: number }>();
+  const results = await Promise.all((rooms.results || []).map(async (room) => {
+    const result = await cleanupRoomEphemeral(env, room.id, Number(room.taskRetentionDays), Number(room.voiceRetentionDays));
+    if (result.taskIds.length || result.voiceIds.length) {
+      await broadcast(env, room.id, 'ephemeral.cleared', { clearedAt: nowIso(), taskIds: result.taskIds, voiceIds: result.voiceIds });
+    }
+    return result;
+  }));
+  return {
+    clearedAt: nowIso(),
+    voiceObjects: results.reduce((total, result) => total + result.voiceObjects.length, 0),
+    rooms: rooms.results?.length || 0,
+  };
 }
 
 function validDoodleColor(value: unknown) {
@@ -266,9 +307,11 @@ async function ensureRoom(env: Env, roomId: string, user: AuthUser) {
 
 async function roomState(env: Env, request: Request, roomId: string, user: AuthUser) {
   const room = await env.DB.prepare(`
-    SELECT id, target_at AS targetAt, blur_px AS blurPx, contrast, brightness, slogan, background_key AS backgroundKey, updated_at AS updatedAt
+    SELECT id, target_at AS targetAt, blur_px AS blurPx, contrast, brightness, slogan,
+      task_retention_days AS taskRetentionDays, voice_retention_days AS voiceRetentionDays,
+      background_key AS backgroundKey, updated_at AS updatedAt
     FROM rooms WHERE id = ?1
-  `).bind(roomId).first<{ id: string; targetAt: string; blurPx: number; contrast: number; brightness: number; slogan: string; backgroundKey: string | null; updatedAt: string }>();
+  `).bind(roomId).first<{ id: string; targetAt: string; blurPx: number; contrast: number; brightness: number; slogan: string; taskRetentionDays: number; voiceRetentionDays: number; backgroundKey: string | null; updatedAt: string }>();
   if (!room) return null;
 
   const membership = await roomMember(env, roomId, user.id);
@@ -279,8 +322,11 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
 
   const tasksResult = await env.DB.prepare(`
     SELECT id, text, completed, author_id AS authorId, completed_by AS completedBy, created_at AS createdAt, updated_at AS updatedAt
-    FROM tasks WHERE room_id = ?1 ORDER BY created_at ASC, id ASC
-  `).bind(roomId).all();
+    FROM (
+      SELECT id, text, completed, author_id, completed_by, created_at, updated_at
+      FROM tasks WHERE room_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2
+    ) ORDER BY createdAt ASC, id ASC
+  `).bind(roomId, MAX_TASKS_PER_ROOM).all();
   const voiceResult = await env.DB.prepare(`
     SELECT id, author_id AS authorId, mime_type AS mimeType, duration_ms AS durationMs, created_at AS createdAt
     FROM (
@@ -288,10 +334,10 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
       FROM voice_notes
       WHERE room_id = ?1
       ORDER BY created_at DESC, id DESC
-      LIMIT 40
+      LIMIT ?2
     )
     ORDER BY createdAt ASC, id ASC
-  `).bind(roomId).all();
+  `).bind(roomId, MAX_VOICE_NOTES_PER_ROOM).all();
   const doodleResult = await env.DB.prepare(`
     SELECT id, author_id AS authorId, style, color, points_json AS pointsJson, created_at AS createdAt
     FROM doodles
@@ -311,6 +357,8 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     contrast: room.contrast,
     brightness: room.brightness,
     slogan: room.slogan ?? '把想念留给时间',
+    taskRetentionDays: validRetentionDays(Number(room.taskRetentionDays)) ? Number(room.taskRetentionDays) : 1,
+    voiceRetentionDays: validRetentionDays(Number(room.voiceRetentionDays)) ? Number(room.voiceRetentionDays) : 1,
     theme: brushSettings?.theme === 'dark' ? 'dark' : 'light',
     brushColor: brushSettings?.brushColor || '#8be9fd',
     brushStyle: 'neon',
@@ -403,13 +451,16 @@ async function destroyRoom(env: Env, roomId: string, user: AuthUser) {
 }
 
 async function handleSettings(request: Request, env: Env, roomId: string, user: AuthUser) {
-  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number; slogan?: string; brushColor?: string; brushStyle?: string; theme?: string }>(request);
+  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number; slogan?: string; brushColor?: string; brushStyle?: string; theme?: string; taskRetentionDays?: number; voiceRetentionDays?: number }>(request);
   const targetAt = new Date(input.targetAt || '');
   const blurPx = Number(input.blurPx);
   const contrast = input.contrast === undefined ? 1 : Number(input.contrast);
   const brightness = input.brightness === undefined ? 1 : Number(input.brightness);
-  const currentSlogan = await env.DB.prepare('SELECT slogan FROM rooms WHERE id = ?1').bind(roomId).first<{ slogan: string }>();
-  const slogan = input.slogan === undefined ? (currentSlogan?.slogan || '把想念留给时间') : String(input.slogan).trim();
+  const currentRoom = await env.DB.prepare('SELECT slogan, task_retention_days AS taskRetentionDays, voice_retention_days AS voiceRetentionDays FROM rooms WHERE id = ?1')
+    .bind(roomId).first<{ slogan: string; taskRetentionDays: number; voiceRetentionDays: number }>();
+  const slogan = input.slogan === undefined ? (currentRoom?.slogan || '把想念留给时间') : String(input.slogan).trim();
+  const taskRetentionDays = input.taskRetentionDays === undefined ? Number(currentRoom?.taskRetentionDays ?? 1) : Number(input.taskRetentionDays);
+  const voiceRetentionDays = input.voiceRetentionDays === undefined ? Number(currentRoom?.voiceRetentionDays ?? 1) : Number(input.voiceRetentionDays);
   const currentBrush = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle, theme FROM users WHERE id = ?1')
     .bind(user.id).first<{ brushColor: string; brushStyle: string; theme: string }>();
   const brushColor = input.brushColor === undefined ? (currentBrush?.brushColor || '#8be9fd') : String(input.brushColor);
@@ -419,17 +470,20 @@ async function handleSettings(request: Request, env: Env, roomId: string, user: 
   if (!Number.isInteger(blurPx) || blurPx < 0 || blurPx > 24) return json({ error: '背景模糊度需要在 0 到 24 之间。' }, 400);
   if (!Number.isFinite(contrast) || contrast < 0 || contrast > 2) return json({ error: '背景对比度需要在 0% 到 200% 之间。' }, 400);
   if (!Number.isFinite(brightness) || brightness < 0 || brightness > 2) return json({ error: '背景亮度需要在 0% 到 200% 之间。' }, 400);
+  if (!validRetentionDays(taskRetentionDays)) return json({ error: '任务清除时间需要设置为 1 到 36500 天，或选择永久保留。' }, 400);
+  if (!validRetentionDays(voiceRetentionDays)) return json({ error: '录音清除时间需要设置为 1 到 36500 天，或选择永久保留。' }, 400);
   if (Array.from(slogan).length > 20) return json({ error: '底部文案最多 20 个字。' }, 400);
   if (!validDoodleColor(brushColor)) return json({ error: '涂鸦颜色格式无效。' }, 400);
   if (!validDoodleStyle(brushStyle)) return json({ error: '涂鸦样式无效。' }, 400);
   const updatedAt = nowIso();
   await env.DB.batch([
-    env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, slogan = ?5, updated_at = ?6 WHERE id = ?7')
-      .bind(targetAt.toISOString(), blurPx, contrast, brightness, slogan, updatedAt, roomId),
+    env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, slogan = ?5, task_retention_days = ?6, voice_retention_days = ?7, updated_at = ?8 WHERE id = ?9')
+      .bind(targetAt.toISOString(), blurPx, contrast, brightness, slogan, taskRetentionDays, voiceRetentionDays, updatedAt, roomId),
     env.DB.prepare('UPDATE users SET brush_color = ?1, brush_style = ?2, theme = ?3 WHERE id = ?4')
       .bind(brushColor, brushStyle, theme, user.id),
   ]);
-  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, slogan, brushColor, brushStyle, updatedAt, actorId: user.id });
+  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, slogan, taskRetentionDays, voiceRetentionDays, brushColor, brushStyle, updatedAt, actorId: user.id });
+  await cleanupRoomAndBroadcast(env, roomId);
   return json(await roomState(env, request, roomId, user));
 }
 
@@ -484,6 +538,7 @@ async function handleTasks(request: Request, env: Env, roomId: string, memberId:
     `).bind(id, roomId, text, memberId, timestamp).run();
     const task = { id, text, completed: false, authorId: memberId, completedBy: null, createdAt: timestamp, updatedAt: timestamp };
     await broadcast(env, roomId, 'task.created', task);
+    await cleanupRoomAndBroadcast(env, roomId);
     return json(task, 201);
   }
   if (!taskId) return json({ error: '缺少任务 ID。' }, 400);
@@ -557,6 +612,7 @@ async function handleVoiceUpload(request: Request, env: Env, roomId: string, mem
   `).bind(id, roomId, memberId, key, mimeType, durationMs, createdAt).run();
   const note = { id, authorId: memberId, mimeType, durationMs, createdAt, url: `/api/voice/${id}?room=${encodeURIComponent(roomId)}` };
   await broadcast(env, roomId, 'voice.created', note);
+  await cleanupRoomAndBroadcast(env, roomId);
   return json(note, 201);
 }
 

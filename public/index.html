@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#15202a" />
     <title>见面倒计时</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css?v=12" />
+    <link rel="stylesheet" href="/styles.css?v=13" />
   </head>
   <body>
     <section class="auth-gate" id="auth-gate" aria-labelledby="auth-title">
@@ -167,6 +167,17 @@
           <input id="brush-color" type="color" value="#8be9fd" />
         </div>
 
+        <div class="retention-settings">
+          <div class="form-field retention-field">
+            <div class="label-row"><label for="task-retention-days">任务保留</label><span>最近 100 条</span></div>
+            <div class="retention-control"><input id="task-retention-days" type="number" min="1" max="36500" step="1" value="1" inputmode="numeric" /><span>天</span><label class="retention-forever"><input id="task-retention-forever" type="checkbox" />永久</label></div>
+          </div>
+          <div class="form-field retention-field">
+            <div class="label-row"><label for="voice-retention-days">录音保留</label><span>最近 200 条</span></div>
+            <div class="retention-control"><input id="voice-retention-days" type="number" min="1" max="36500" step="1" value="1" inputmode="numeric" /><span>天</span><label class="retention-forever"><input id="voice-retention-forever" type="checkbox" />永久</label></div>
+          </div>
+        </div>
+
         <div class="room-settings">
           <div class="label-row"><label for="invite-url">房间邀请</label><span id="room-members">1 / 2</span></div>
           <div class="invite-row"><input id="invite-url" type="text" readonly aria-label="房间邀请链接" /><button class="text-button" id="copy-invite" type="button">复制</button></div>
@@ -184,6 +195,6 @@
     <div class="context-menu hidden" id="context-menu" role="menu">
       <button id="context-delete" type="button" role="menuitem">删除</button>
     </div>
-    <script type="module" src="/app.js?v=12"></script>
+    <script type="module" src="/app.js?v=13"></script>
   </body>
 </html>
