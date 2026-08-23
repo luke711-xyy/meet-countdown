@@ -234,18 +234,34 @@ async function roomMember(env: Env, roomId: string, userId: string) {
   `).bind(roomId, userId).first<{ roomId: string; slot: number; userId: string; username: string }>();
 }
 
+async function boundRoom(env: Env, userId: string) {
+  return env.DB.prepare(`
+    SELECT room_members.room_id AS roomId, room_members.slot, room_members.joined_at AS joinedAt
+    FROM room_members JOIN rooms ON rooms.id = room_members.room_id
+    WHERE room_members.user_id = ?1
+    ORDER BY (SELECT COUNT(*) FROM room_members members WHERE members.room_id = room_members.room_id) DESC,
+      room_members.joined_at DESC, room_members.room_id DESC
+    LIMIT 1
+  `).bind(userId).first<{ roomId: string; slot: number; joinedAt: string }>();
+}
+
 async function ensureRoom(env: Env, roomId: string, user: AuthUser) {
   const existing = await env.DB.prepare('SELECT id FROM rooms WHERE id = ?1').bind(roomId).first();
   if (existing) return;
   const timestamp = nowIso();
   const targetAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  await env.DB.batch([
-    env.DB.prepare(`
-      INSERT INTO rooms (id, target_at, blur_px, background_key, contrast, brightness, slogan, created_at, updated_at)
-      VALUES (?1, ?2, 0, NULL, 1.0, 1.0, '把想念留给时间', ?3, ?3)
-    `).bind(roomId, targetAt, timestamp),
-    env.DB.prepare('INSERT INTO room_members (room_id, user_id, slot, joined_at) VALUES (?1, ?2, 0, ?3)').bind(roomId, user.id, timestamp),
-  ]);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO rooms (id, target_at, blur_px, background_key, contrast, brightness, slogan, created_at, updated_at)
+        VALUES (?1, ?2, 0, NULL, 1.0, 1.0, '把想念留给时间', ?3, ?3)
+      `).bind(roomId, targetAt, timestamp),
+      env.DB.prepare('INSERT INTO room_members (room_id, user_id, slot, joined_at) VALUES (?1, ?2, 0, ?3)').bind(roomId, user.id, timestamp),
+    ]);
+  } catch (error) {
+    const existingRoom = await boundRoom(env, user.id);
+    if (!existingRoom) throw error;
+  }
 }
 
 async function roomState(env: Env, request: Request, roomId: string, user: AuthUser) {
@@ -334,11 +350,15 @@ async function broadcast(env: Env, roomId: string, type: string, payload: unknow
 
 async function handleRoom(request: Request, env: Env, user: AuthUser) {
   const input = await bodyJson<{ roomId?: string }>(request);
-  const roomId = input.roomId || `room_${randomToken(10)}`;
+  let roomId = input.roomId || '';
+  const existingRoom = await boundRoom(env, user.id);
+  if (!input.roomId && existingRoom) roomId = existingRoom.roomId;
+  if (!roomId) roomId = `room_${randomToken(10)}`;
   if (!ROOM_PATTERN.test(roomId)) return json({ error: '房间链接无效。' }, 400);
   if (input.roomId) {
     const room = await env.DB.prepare('SELECT id FROM rooms WHERE id = ?1').bind(roomId).first();
     if (!room) return json({ error: '房间不存在。' }, 404);
+    if (existingRoom && existingRoom.roomId !== roomId) return json({ error: '这个账号已经在另一个房间中，请先退出并销毁当前房间后再加入新的房间。' }, 409);
     if (!(await roomMember(env, roomId, user.id))) {
       const slots = await env.DB.prepare('SELECT slot FROM room_members WHERE room_id = ?1 ORDER BY slot ASC').bind(roomId).all<{ slot: number }>();
       const usedSlots = new Set((slots.results || []).map((item) => item.slot));
