@@ -25,6 +25,9 @@ let authMode = 'login';
 let selectedBackground = null;
 let selectedBackgroundFile = null;
 let backgroundSelection = 'unchanged';
+let backgroundPreviewUrl = null;
+let backgroundPreparation = null;
+let backgroundSelectionVersion = 0;
 let selectedTheme = 'light';
 let toastTimer = null;
 let socket = null;
@@ -40,8 +43,14 @@ let lastPointerSentAt = 0;
 let lastPointer = null;
 let doodlePointer = null;
 let savePromise = null;
+const doodleUndoStack = [];
+const doodleRedoStack = [];
+const pendingDoodleWrites = new Map();
+const pendingDoodleDeletes = new Map();
+let doodleHistoryBusy = false;
 const DOODLE_PREVIEW_INTERVAL = 40;
 const DEFAULT_BACKGROUND = '/default-background.png';
+const MAX_BACKGROUND_DIMENSION = 4096;
 const doodle = new DoodleCanvas(elements.doodleCanvas);
 const water = new WaterBackground(elements.waterCanvas, elements.doodleCanvas);
 
@@ -105,6 +114,55 @@ function waterPoint(event) {
   return surfacePoint(event);
 }
 
+function revokeBackgroundPreview() {
+  if (backgroundPreviewUrl) URL.revokeObjectURL(backgroundPreviewUrl);
+  backgroundPreviewUrl = null;
+}
+
+async function openBackgroundSource(file) {
+  if (typeof createImageBitmap === 'function') {
+    const bitmap = await createImageBitmap(file);
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close?.() };
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const candidate = new Image();
+      candidate.onload = () => resolve(candidate);
+      candidate.onerror = () => reject(new Error('背景图片无法读取。'));
+      candidate.src = url;
+    });
+    return { source: image, width: image.naturalWidth, height: image.naturalHeight, close: () => URL.revokeObjectURL(url) };
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
+}
+
+async function prepareBackgroundFile(file) {
+  const bitmap = await openBackgroundSource(file);
+  try {
+    const longestSide = Math.max(bitmap.width, bitmap.height);
+    if (longestSide <= MAX_BACKGROUND_DIMENSION) return file;
+    const scale = MAX_BACKGROUND_DIMENSION / longestSide;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d', { alpha: file.type === 'image/png' });
+    if (!context) throw new Error('无法准备背景图片。');
+    context.drawImage(bitmap.source, 0, 0, canvas.width, canvas.height);
+    const outputType = file.type === 'image/jpeg' || file.type === 'image/webp' ? file.type : 'image/png';
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((result) => result ? resolve(result) : reject(new Error('背景图片压缩失败。')), outputType, outputType === 'image/jpeg' ? 0.92 : undefined);
+    });
+    const extension = outputType === 'image/jpeg' ? 'jpg' : outputType.split('/')[1];
+    const name = file.name.replace(/\.[^.]+$/, '') || 'background';
+    return new File([blob], `${name}.${extension}`, { type: outputType, lastModified: Date.now() });
+  } finally {
+    bitmap.close();
+  }
+}
+
 function isDoodleSurface(event) {
   return !event.target?.closest?.('button, input, textarea, select, form, .edge-rail, .settings-dialog, .auth-gate, .room-gate, .context-menu');
 }
@@ -114,24 +172,112 @@ function sendDoodlePreview(stroke, phase, point) {
   socket.send(JSON.stringify({ type: 'doodle.preview', payload: { id: stroke.id, phase, x: point.x, y: point.y, style: stroke.style, color: stroke.color } }));
 }
 
+function cloneDoodle(stroke) {
+  return { ...stroke, preview: false, points: (stroke.points || []).map((point) => ({ x: point.x, y: point.y })) };
+}
+
+function clearDoodleHistory() {
+  doodleUndoStack.length = 0;
+  doodleRedoStack.length = 0;
+}
+
+function recordDoodleAction(action) {
+  doodleUndoStack.push(action);
+  doodleRedoStack.length = 0;
+}
+
+async function saveDoodleOnServer(stroke) {
+  const saved = await api('/api/doodles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: stroke.id, style: 'neon', color: stroke.color, points: stroke.points }) });
+  state.doodles = [...(state.doodles || []).filter((item) => item.id !== saved.id), saved];
+  doodle.add(saved);
+  return saved;
+}
+
 async function persistDoodle(stroke) {
+  const pending = (async () => {
+    try {
+      const saved = await saveDoodleOnServer(stroke);
+      recordDoodleAction({ type: 'create', stroke: cloneDoodle(saved) });
+    } catch (error) {
+      doodle.remove(stroke.id);
+      showToast(error.message);
+    }
+  })();
+  pendingDoodleWrites.set(stroke.id, pending);
   try {
-    const saved = await api('/api/doodles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: stroke.id, style: stroke.style, color: stroke.color, points: stroke.points }) });
-    state.doodles = [...(state.doodles || []).filter((item) => item.id !== saved.id), saved];
-    doodle.add(saved);
-  } catch (error) {
-    doodle.remove(stroke.id);
-    showToast(error.message);
+    await pending;
+  } finally {
+    pendingDoodleWrites.delete(stroke.id);
   }
 }
 
-async function eraseDoodle(id) {
+async function deleteDoodleOnServer(id) {
+  await api(`/api/doodles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== id);
+  doodle.remove(id);
+}
+
+async function eraseDoodle(id, stroke) {
+  const snapshot = cloneDoodle(stroke);
+  const pending = (async () => {
+    try {
+      await deleteDoodleOnServer(id);
+      recordDoodleAction({ type: 'delete', stroke: snapshot });
+    } catch (error) {
+      showToast(error.message);
+      await syncEphemeralState();
+    }
+  })();
+  pendingDoodleDeletes.set(id, pending);
   try {
-    await api(`/api/doodles/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== id);
-  } catch (error) {
-    showToast(error.message);
-    await syncEphemeralState();
+    await pending;
+  } finally {
+    pendingDoodleDeletes.delete(id);
+  }
+}
+
+async function waitForPendingDoodleOperations() {
+  const pending = [...pendingDoodleWrites.values(), ...pendingDoodleDeletes.values()];
+  if (pending.length) await Promise.allSettled(pending);
+}
+
+async function undoDoodle() {
+  if (doodleHistoryBusy) return;
+  doodleHistoryBusy = true;
+  try {
+    await waitForPendingDoodleOperations();
+    const action = doodleUndoStack.pop();
+    if (!action) return;
+    try {
+      if (action.type === 'create') await deleteDoodleOnServer(action.stroke.id);
+      else await saveDoodleOnServer(action.stroke);
+      doodleRedoStack.push(action);
+    } catch (error) {
+      doodleUndoStack.push(action);
+      showToast(error.message);
+    }
+  } finally {
+    doodleHistoryBusy = false;
+  }
+}
+
+async function redoDoodle() {
+  if (doodleHistoryBusy) return;
+  doodleHistoryBusy = true;
+  try {
+    await waitForPendingDoodleOperations();
+    const action = doodleRedoStack.pop();
+    if (!action) return;
+    try {
+      if (action.type === 'create') await saveDoodleOnServer(action.stroke);
+      else await deleteDoodleOnServer(action.stroke.id);
+      doodleUndoStack.push(action);
+    } catch (error) {
+      doodleRedoStack.push(action);
+      showToast(error.message);
+    }
+  } finally {
+    doodleHistoryBusy = false;
   }
 }
 
@@ -191,7 +337,7 @@ function setAuthMode(mode) {
 
 async function refreshAuth() {
   try {
-    const response = await fetch('/api/auth/me', { cache: 'no-store' });
+    const response = await fetch('/api/auth/me', { cache: 'no-store', credentials: 'same-origin' });
     if (!response.ok) return null;
     const result = await response.json(); currentUser = result.user; memberId = currentUser.id; elements.accountName.textContent = currentUser.username; elements.authGate.classList.add('hidden');
     return currentUser;
@@ -225,12 +371,15 @@ async function api(path, options = {}) {
 async function loadState() {
   try {
     state = await api('/api/state'); applyTheme(state.theme); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
-    setBrushSettings(state.brushColor); doodle.hydrate(state.doodles || [], memberId); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
+    setBrushSettings(state.brushColor); doodle.hydrate(state.doodles || [], memberId); clearDoodleHistory(); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
   } catch (error) { elements.targetSummary.textContent = '请确认后端服务正在运行'; console.error(error); }
 }
 
 function openSettings() {
   if (!state) return;
+  backgroundSelectionVersion += 1;
+  backgroundPreparation = null;
+  revokeBackgroundPreview();
   elements.saveStatus.textContent = '';
   applyTheme(state.theme);
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels();
@@ -243,13 +392,38 @@ function openSettings() {
 function hideSettings() { elements.dialog.classList.add('hidden'); elements.dialog.setAttribute('aria-hidden', 'true'); }
 function closeSettings() { if (!elements.dialog.classList.contains('hidden')) void saveSettings(); }
 
-function handleBackgroundFile(file) {
+async function handleBackgroundFile(file) {
   if (!file) return;
   if (file.size > 30 * 1024 * 1024) return showToast('图片太大了，请选择 30 MB 以内的照片');
-  selectedBackgroundFile = file; backgroundSelection = 'upload';
-  const reader = new FileReader();
-  reader.addEventListener('load', () => { selectedBackground = reader.result; elements.fileName.textContent = file.name; elements.removeBackground.classList.remove('hidden'); setBackground(selectedBackground, Number(elements.blurRange.value)); });
-  reader.readAsDataURL(file);
+  const version = ++backgroundSelectionVersion;
+  revokeBackgroundPreview();
+  selectedBackground = null;
+  selectedBackgroundFile = null;
+  backgroundSelection = 'upload';
+  elements.fileName.textContent = file.name;
+  elements.removeBackground.classList.remove('hidden');
+  backgroundPreparation = (async () => {
+    const prepared = await prepareBackgroundFile(file);
+    if (version !== backgroundSelectionVersion) return;
+    selectedBackgroundFile = prepared;
+    backgroundPreviewUrl = URL.createObjectURL(prepared);
+    selectedBackground = backgroundPreviewUrl;
+    setBackground(selectedBackground, Number(elements.blurRange.value));
+  })();
+  try {
+    await backgroundPreparation;
+  } catch (error) {
+    if (version === backgroundSelectionVersion) {
+      selectedBackground = null;
+      selectedBackgroundFile = null;
+      backgroundSelection = 'unchanged';
+      elements.removeBackground.classList.add('hidden');
+      setBackground(currentBackground(), Number(elements.blurRange.value));
+      showToast(error.message || '背景图片处理失败。');
+    }
+  } finally {
+    if (version === backgroundSelectionVersion) backgroundPreparation = null;
+  }
 }
 
 async function saveSettings(event) {
@@ -258,7 +432,8 @@ async function saveSettings(event) {
   elements.saveStatus.textContent = '正在保存…';
   savePromise = (async () => {
     try {
-      const targetAt = new Date(elements.targetAt.value).toISOString();
+    const targetAt = new Date(elements.targetAt.value).toISOString();
+      if (backgroundPreparation) await backgroundPreparation;
       if (roomId) {
         if (backgroundSelection === 'upload' && selectedBackgroundFile) await api('/api/background', { method: 'PUT', headers: { 'Content-Type': selectedBackgroundFile.type }, body: selectedBackgroundFile });
         else if (backgroundSelection === 'remove') await api('/api/background', { method: 'DELETE' });
@@ -266,7 +441,7 @@ async function saveSettings(event) {
       } else {
         state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: 'neon', theme: selectedTheme }) });
       }
-      elements.saveStatus.textContent = ''; applyTheme(state.theme); setBrushSettings(state.brushColor); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; hideSettings(); showToast('设置已保存'); render();
+      elements.saveStatus.textContent = ''; applyTheme(state.theme); setBrushSettings(state.brushColor); revokeBackgroundPreview(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; hideSettings(); showToast('设置已保存'); render();
     } catch (error) {
       elements.saveStatus.textContent = error.message;
     } finally {
@@ -285,9 +460,24 @@ function makeTaskElement(task, index) {
   const text = document.createElement('span'); text.className = 'task-text'; text.textContent = task.text; if (task.completed) text.classList.add('is-completed');
   item.append(checkbox, text); return item;
 }
+
+function roomCreatorId() {
+  const members = [...(state?.members || [])].sort((a, b) => Number(a.slot || 0) - Number(b.slot || 0) || String(a.id).localeCompare(String(b.id)));
+  return members[0]?.id || null;
+}
+
 function renderTasks() {
-  const tasks = [...(state?.tasks || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id))); const theirs = tasks.filter((task) => task.authorId !== memberId); const mine = tasks.filter((task) => task.authorId === memberId);
-  elements.taskListTheirs.replaceChildren(...theirs.map(makeTaskElement)); elements.taskListMine.replaceChildren(...mine.map((task, index) => makeTaskElement(task, index)));
+  const tasks = [...(state?.tasks || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
+  const creatorId = roomCreatorId();
+  // The creator is always the lower side; the invited member is always the upper side.
+  // This keeps both participants looking at the same spatial arrangement.
+  const upperTasks = creatorId ? tasks.filter((task) => task.authorId !== creatorId) : tasks.filter((task) => task.authorId !== memberId);
+  const lowerTasks = creatorId ? tasks.filter((task) => task.authorId === creatorId) : tasks.filter((task) => task.authorId === memberId);
+  // The upper zone grows upward from the divider: newest items sit nearest the divider.
+  // Its list uses column-reverse, so render newest-first to keep that visual order.
+  elements.taskListTheirs.replaceChildren(...[...upperTasks].reverse().map(makeTaskElement));
+  // The lower zone keeps the existing chat-like order and grows downward from the divider.
+  elements.taskListMine.replaceChildren(...lowerTasks.map((task, index) => makeTaskElement(task, index)));
   const incomplete = tasks.filter((task) => !task.completed).length;
   elements.taskCount.textContent = incomplete ? String(incomplete) : '';
 }
@@ -346,7 +536,7 @@ function applyRealtimeEvent(event) {
   else if (event.type === 'doodle.created') { state.doodles = [...(state.doodles || []).filter((stroke) => stroke.id !== payload.id), payload]; doodle.add(payload); }
   else if (event.type === 'doodle.deleted') { state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== payload.id); doodle.remove(payload.id); }
   else if (event.type === 'room.joined') { state.members = [...(state.members || []).filter((member) => member.id !== payload.userId), { id: payload.userId, username: payload.username, slot: payload.slot }].sort((a, b) => a.slot - b.slot); elements.roomMembers.textContent = `${state.members.length} / 2`; showToast(`${payload.username || '对方'} 已加入房间`); }
-  else if (event.type === 'room.destroyed') { state = null; socket?.close(); socket = null; showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
+  else if (event.type === 'room.destroyed') { clearDoodleHistory(); state = null; socket?.close(); socket = null; showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
   else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; renderTasks(); renderVoiceNotes(); }
 }
 
@@ -439,12 +629,12 @@ async function destroyCurrentRoom() {
   if (!roomId || !window.confirm('退出后，这个房间和其中的任务、录音会立即销毁，另一方也会被通知。继续吗？')) return;
   elements.destroyRoom.disabled = true;
   try {
-    await api('/api/room', { method: 'DELETE' }); socket?.close(); socket = null; roomId = null; state = null; history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); hideSettings();
+    await api('/api/room', { method: 'DELETE' }); clearDoodleHistory(); socket?.close(); socket = null; roomId = null; state = null; history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); hideSettings();
   } catch (error) { showToast(error.message); } finally { elements.destroyRoom.disabled = false; }
 }
 
 async function logout() {
-  await fetch('/api/auth/logout', { method: 'POST' }); socket?.close(); socket = null; currentUser = null; memberId = null; location.href = '/';
+  await fetch('/api/auth/logout', { method: 'POST' }); clearDoodleHistory(); socket?.close(); socket = null; currentUser = null; memberId = null; location.href = '/';
 }
 
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
@@ -455,7 +645,7 @@ elements.brushColor.addEventListener('input', () => { elements.brushColorOutput.
 elements.themeLight.addEventListener('click', () => applyTheme('light'));
 elements.themeDark.addEventListener('click', () => applyTheme('dark'));
 elements.chooseBackground.addEventListener('click', () => { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp,image/gif'; input.addEventListener('change', () => handleBackgroundFile(input.files?.[0])); input.click(); });
-elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(DEFAULT_BACKGROUND, Number(elements.blurRange.value)); });
+elements.removeBackground.addEventListener('click', () => { backgroundSelectionVersion += 1; backgroundPreparation = null; revokeBackgroundPreview(); selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(DEFAULT_BACKGROUND, Number(elements.blurRange.value)); });
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
 elements.dialog.addEventListener('click', (event) => { if (event.target === elements.dialog) closeSettings(); }); elements.voiceOrb.addEventListener('click', startRecording); elements.taskOrb.addEventListener('click', openTaskComposer);
 elements.cancelVoice.addEventListener('click', cancelRecording); elements.stopVoice.addEventListener('click', stopRecording); elements.cancelTask.addEventListener('click', cancelTaskComposer);
@@ -467,6 +657,20 @@ elements.contextDelete.addEventListener('click', deleteContextTarget);
 elements.taskComposer.addEventListener('submit', async (event) => { event.preventDefault(); const text = elements.taskInput.value.trim(); if (!text || !roomId) return; try { await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }); elements.taskInput.value = ''; closeTaskComposer(); } catch (error) { showToast(error.message); } });
 document.addEventListener('pointerdown', (event) => { if (!event.target.closest?.('#context-menu')) closeContextMenu(); });
 document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (!elements.contextMenu.classList.contains('hidden')) closeContextMenu(); else if (elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer(); else if (recorder?.state === 'recording') cancelRecording(); });
+document.addEventListener('keydown', (event) => {
+  if ((!event.ctrlKey && !event.metaKey) || event.altKey || event.isComposing) return;
+  if (event.target?.closest?.('input, textarea, select, [contenteditable="true"], [contenteditable=""], button, form, .settings-dialog, .edge-rail, .auth-gate, .room-gate, .context-menu')) return;
+  const key = event.key.toLowerCase();
+  const undo = key === 'z' && !event.shiftKey;
+  const redo = key === 'y' || (key === 'z' && event.shiftKey);
+  if (undo && (doodleUndoStack.length || pendingDoodleWrites.size || pendingDoodleDeletes.size)) {
+    event.preventDefault();
+    void undoDoodle();
+  } else if (redo && doodleRedoStack.length) {
+    event.preventDefault();
+    void redoDoodle();
+  }
+});
 window.addEventListener('pointermove', (event) => {
   const pointer = waterPoint(event); const x = pointer.x; const y = pointer.y; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
   if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }

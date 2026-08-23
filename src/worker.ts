@@ -25,7 +25,7 @@ const MAX_DOODLE_POINTS = 800;
 const DOODLE_STYLES = new Set(['neon', 'fireworks']);
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const AUTH_COOKIE = 'meet_auth';
-const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
+const SESSION_MAX_AGE = 60 * 60 * 24 * 365;
 const PASSWORD_ITERATIONS = 100_000;
 
 function nowIso() {
@@ -63,6 +63,10 @@ function validDoodleColor(value: unknown) {
 
 function validDoodleStyle(value: unknown): value is 'neon' | 'fireworks' {
   return typeof value === 'string' && DOODLE_STYLES.has(value);
+}
+
+function normalizeDoodleStyle(value: unknown) {
+  return value === 'fireworks' ? 'neon' : String(value || '');
 }
 
 function validDoodlePoints(value: unknown) {
@@ -136,14 +140,15 @@ async function authenticatedUser(request: Request, env: Env) {
 function withAuthCookie(response: Response, request: Request, token: string) {
   const headers = new Headers(response.headers);
   const secure = new URL(request.url).protocol === 'https:' ? ' Secure;' : '';
-  headers.append('Set-Cookie', `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax;${secure} Max-Age=${SESSION_MAX_AGE}`);
+  const expires = new Date(Date.now() + SESSION_MAX_AGE * 1000).toUTCString();
+  headers.append('Set-Cookie', `${AUTH_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax;${secure} Max-Age=${SESSION_MAX_AGE}; Expires=${expires}`);
   return new Response(response.body, { status: response.status, headers });
 }
 
 function clearAuthCookie(response: Response, request: Request) {
   const headers = new Headers(response.headers);
   const secure = new URL(request.url).protocol === 'https:' ? ' Secure;' : '';
-  headers.append('Set-Cookie', `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax;${secure} Max-Age=0`);
+  headers.append('Set-Cookie', `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax;${secure} Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`);
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -177,7 +182,13 @@ function validUsername(value: string) {
 async function handleAuth(request: Request, env: Env, action: 'register' | 'login' | 'logout' | 'me') {
   if (action === 'me') {
     const user = await authenticatedUser(request, env);
-    return user ? json({ user }) : json({ error: '请先登录。' }, 401);
+    const token = cookie(request, AUTH_COOKIE);
+    if (!user || !token) return json({ error: '请先登录。' }, 401);
+    // Refresh both the server-side expiry and the browser cookie whenever the
+    // app starts, so an actively used account does not age out unexpectedly.
+    await env.DB.prepare('UPDATE auth_sessions SET expires_at = ?1 WHERE token_hash = ?2')
+      .bind(new Date(Date.now() + SESSION_MAX_AGE * 1000).toISOString(), await sha256(token)).run();
+    return withAuthCookie(json({ user }), request, token);
   }
   if (action === 'logout') {
     const token = cookie(request, AUTH_COOKIE);
@@ -308,7 +319,7 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
       try {
         const points = JSON.parse(String(doodle.pointsJson));
         if (!validDoodlePoints(points) || !validDoodleColor(doodle.color) || !validDoodleStyle(doodle.style)) return [];
-        return [{ id: doodle.id, authorId: doodle.authorId, style: doodle.style, color: doodle.color, points, createdAt: doodle.createdAt, mine: doodle.authorId === user.id }];
+        return [{ id: doodle.id, authorId: doodle.authorId, style: normalizeDoodleStyle(doodle.style), color: doodle.color, points, createdAt: doodle.createdAt, mine: doodle.authorId === user.id }];
       } catch {
         return [];
       }
@@ -482,7 +493,7 @@ async function handleDoodles(request: Request, env: Env, roomId: string, doodleI
   if (request.method === 'POST') {
     const input = await bodyJson<{ id?: string; style?: string; color?: string; points?: unknown }>(request);
     const id = String(input.id || `doodle_${crypto.randomUUID()}`);
-    const style = String(input.style || '');
+    const style = normalizeDoodleStyle(input.style);
     const color = String(input.color || '');
     if (!/^doodle_[a-zA-Z0-9_-]{8,100}$/.test(id)) return json({ error: '涂鸦 ID 无效。' }, 400);
     if (!validDoodleStyle(style)) return json({ error: '涂鸦样式无效。' }, 400);
@@ -562,6 +573,12 @@ export default {
       }
 
       const roomId = requestedRoom(request);
+      // An invite URL is still a document request. Serve the app shell first so
+      // an unauthenticated invitee can see the login/register gate; the client
+      // will call /api/room after authentication to join the room.
+      if (request.method === 'GET' && !url.pathname.startsWith('/api/') && url.pathname !== '/ws') {
+        return env.ASSETS.fetch(request);
+      }
       if (url.pathname === '/ws') {
         if (!roomId) return new Response('Missing room', { status: 400 });
         if (!user || !(await roomMember(env, roomId, user.id))) return new Response('Unauthorized', { status: 401 });
@@ -635,7 +652,7 @@ export class CoupleRoom extends DurableObject<Env> {
         const phase = payload.phase === 'start' ? 'start' : 'point';
         const x = Number(payload.x);
         const y = Number(payload.y);
-        const style = String(payload.style || '');
+        const style = normalizeDoodleStyle(payload.style);
         const color = String(payload.color || '');
         if (!/^doodle_[a-zA-Z0-9_-]{8,100}$/.test(id) || !validDoodleStyle(style) || !validDoodleColor(color) || ![x, y].every(Number.isFinite) || x < 0 || x > 1 || y < 0 || y > 1) return;
         const attachment = socket.deserializeAttachment() as { memberId?: string } | null;

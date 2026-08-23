@@ -1,8 +1,7 @@
-const STYLES = new Set(['neon', 'fireworks']);
+const STYLES = new Set(['neon']);
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const BRUSH_PROFILES = {
   neon: { glowWidth: 18, middleWidth: 8, coreWidth: 2.2 },
-  fireworks: { glowWidth: 18, middleWidth: 4, coreWidth: 2.2 },
 };
 const MAX_CLIENT_POINTS = 480;
 
@@ -22,13 +21,9 @@ function distanceToSegment(point, start, end) {
   return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
 }
 
-function seedFrom(value) {
-  let seed = 2166136261;
-  for (let index = 0; index < value.length; index += 1) seed = Math.imul(seed ^ value.charCodeAt(index), 16777619);
-  return () => {
-    seed += seed << 13; seed ^= seed >>> 7; seed += seed << 3; seed ^= seed >>> 17; seed += seed << 5;
-    return ((seed >>> 0) % 10000) / 10000;
-  };
+function normalizeStroke(stroke) {
+  if (!stroke || typeof stroke !== 'object') return stroke;
+  return stroke.style === 'fireworks' ? { ...stroke, style: 'neon' } : stroke;
 }
 
 export class DoodleCanvas {
@@ -93,12 +88,13 @@ export class DoodleCanvas {
     this.authorId = authorId || this.authorId;
     this.strokes.clear();
     this.previews.clear();
-    strokes.filter(validStroke).forEach((stroke) => this.strokes.set(stroke.id, { ...stroke, preview: false }));
+    strokes.map(normalizeStroke).filter(validStroke).forEach((stroke) => this.strokes.set(stroke.id, { ...stroke, preview: false }));
     this.staticDirty = true;
     this.requestRender();
   }
 
   add(stroke) {
+    stroke = normalizeStroke(stroke);
     if (!validStroke(stroke)) return false;
     this.previews.delete(stroke.id);
     this.strokes.set(stroke.id, { ...stroke, preview: false });
@@ -111,7 +107,7 @@ export class DoodleCanvas {
     if (!id || actorId === this.authorId || !Number.isFinite(x) || !Number.isFinite(y)) return;
     const existing = this.previews.get(id);
     const points = phase === 'start' || !existing ? [{ x, y }] : [...existing.points, { x, y }];
-    this.previews.set(id, { id, authorId: actorId, style, color, points, createdAt: createdAt || new Date().toISOString(), preview: true });
+    this.previews.set(id, { id, authorId: actorId, style: 'neon', color, points, createdAt: createdAt || new Date().toISOString(), preview: true });
     this.requestRender();
   }
 
@@ -194,7 +190,7 @@ export class DoodleCanvas {
         : distanceToSegment({ x: point.x * this.width, y: point.y * this.height }, { x: stroke.points[index - 1].x * this.width, y: stroke.points[index - 1].y * this.height }, { x: current.x * this.width, y: current.y * this.height }) < 18);
       if (hit) {
         this.strokes.delete(id);
-        if (typeof onErase === 'function') onErase(id);
+        if (typeof onErase === 'function') onErase(id, { ...stroke, points: stroke.points.map((point) => ({ ...point })), preview: false });
       }
     }
   }
@@ -220,26 +216,17 @@ export class DoodleCanvas {
 
   render() {
     this.renderScheduled = false;
-    const now = Date.now();
     const ctx = this.context;
     if (this.staticDirty) this.rebuildStaticLayer();
     ctx.clearRect(0, 0, this.width, this.height);
     ctx.drawImage(this.staticCanvas, 0, 0, this.canvas.width, this.canvas.height, 0, 0, this.width, this.height);
-    for (const stroke of this.strokes.values()) {
-      if (stroke.style === 'fireworks') this.drawSparks(ctx, stroke, this.pixelPoints(stroke), 1, now);
-    }
     for (const stroke of this.previews.values()) {
       if (stroke.points.length < 2) continue;
-      this.drawStroke(ctx, stroke, 0.82, now);
+      this.drawStroke(ctx, stroke, 0.82);
     }
     this.revision += 1;
     this.canvas.dispatchEvent(new Event('doodle-render'));
-    if (this.previews.size || this.hasAnimatedStrokes()) this.requestRender();
-  }
-
-  hasAnimatedStrokes() {
-    for (const stroke of this.strokes.values()) if (stroke.style === 'fireworks') return true;
-    return false;
+    if (this.previews.size) this.requestRender();
   }
 
   pixelPoints(stroke) {
@@ -261,54 +248,14 @@ export class DoodleCanvas {
       for (let index = 1; index < points.length; index += 1) ctx.lineTo(points[index].x, points[index].y);
       ctx.stroke();
     };
-    if (stroke.style === 'fireworks') {
-      ctx.globalAlpha = opacity * 0.34; ctx.lineWidth = profile.glowWidth; ctx.shadowBlur = 24; ctx.shadowColor = stroke.color; path();
-      ctx.globalAlpha = opacity * 0.88; ctx.lineWidth = profile.middleWidth; ctx.shadowBlur = 10; path();
-      ctx.globalAlpha = opacity; ctx.lineWidth = profile.coreWidth; ctx.shadowBlur = 4; path();
-    } else {
-      ctx.globalAlpha = opacity * 0.2; ctx.lineWidth = profile.glowWidth; ctx.shadowBlur = 28; ctx.shadowColor = stroke.color; path();
-      ctx.globalAlpha = opacity * 0.55; ctx.lineWidth = profile.middleWidth; ctx.shadowBlur = 14; ctx.shadowColor = stroke.color; path();
-      ctx.globalAlpha = opacity; ctx.lineWidth = profile.coreWidth; ctx.shadowBlur = 5; ctx.shadowColor = stroke.color; path();
-    }
+    ctx.globalAlpha = opacity * 0.2; ctx.lineWidth = profile.glowWidth; ctx.shadowBlur = 28; ctx.shadowColor = stroke.color; path();
+    ctx.globalAlpha = opacity * 0.55; ctx.lineWidth = profile.middleWidth; ctx.shadowBlur = 14; ctx.shadowColor = stroke.color; path();
+    ctx.globalAlpha = opacity; ctx.lineWidth = profile.coreWidth; ctx.shadowBlur = 5; ctx.shadowColor = stroke.color; path();
     ctx.restore();
   }
 
-  drawStroke(ctx, stroke, opacity, now) {
+  drawStroke(ctx, stroke, opacity) {
     const points = this.pixelPoints(stroke);
     this.drawTrail(ctx, stroke, opacity);
-    if (stroke.style === 'fireworks' && points.length >= 2) this.drawSparks(ctx, stroke, points, opacity, now);
-  }
-
-  drawSparks(ctx, stroke, points, opacity, now) {
-    const random = seedFrom(stroke.id);
-    const elapsed = Math.max(0, now - new Date(stroke.createdAt).getTime());
-    ctx.save();
-    ctx.strokeStyle = stroke.color;
-    ctx.fillStyle = stroke.color;
-    ctx.lineCap = 'round';
-    const sampleStep = Math.max(1, Math.ceil(points.length / 120));
-    for (let index = 1; index < points.length; index += sampleStep) {
-      const point = points[index];
-      const count = 8 + Math.floor(random() * 6);
-      for (let spark = 0; spark < count; spark += 1) {
-        const angle = random() * Math.PI * 2;
-        const phase = (elapsed / 1050 + random() * 0.65) % 1;
-        const length = (7 + random() * 17) * (1 - phase * 0.82);
-        ctx.globalAlpha = opacity * (0.34 + (1 - phase) * 0.56);
-        ctx.lineWidth = 1.1 + random() * 1.4;
-        ctx.shadowBlur = 9;
-        ctx.shadowColor = stroke.color;
-        ctx.beginPath();
-        ctx.moveTo(point.x + Math.cos(angle) * length * 0.18, point.y + Math.sin(angle) * length * 0.18);
-        ctx.lineTo(point.x + Math.cos(angle) * length, point.y + Math.sin(angle) * length);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = opacity * 0.72;
-      ctx.shadowBlur = 12;
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, 1.5 + random() * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
   }
 }

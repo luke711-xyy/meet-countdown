@@ -125,14 +125,24 @@ export class WaterBackground {
     this.brightness = 1;
     this.blur = 0;
     this.imageRequest = 0;
+    this.animationFrame = 0;
+    this.running = false;
+    this.activeUntil = 0;
+    this.contextLost = false;
     this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.doodleCanvas?.addEventListener('doodle-render', () => { this.doodleDirty = true; });
+    this.wake = this.wake.bind(this);
+    this.render = this.render.bind(this);
+    this.handleContextLost = this.handleContextLost.bind(this);
+    this.handleContextRestored = this.handleContextRestored.bind(this);
+    this.doodleCanvas?.addEventListener('doodle-render', () => { this.doodleDirty = true; this.wake(900); });
   }
 
   async init() {
     try {
       this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, alpha: true, antialias: false, powerPreference: 'high-performance' });
       if (!this.renderer.capabilities.isWebGL2) throw new Error('WebGL2 is required for the ripple field.');
+      this.canvas.addEventListener('webglcontextlost', this.handleContextLost, false);
+      this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored, false);
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8));
       this.renderer.setClearColor(0x000000, 0);
       this.renderer.toneMapping = THREE.NoToneMapping;
@@ -151,9 +161,10 @@ export class WaterBackground {
       this.resizeObserver.observe(this.canvas);
       window.addEventListener('resize', () => this.resize(), { passive: true });
       this.resize();
-      this.render(0);
+      this.wake(300);
       return true;
     } catch (error) {
+      this.stop();
       this.canvas.classList.add('water-unavailable');
       console.warn('Water background unavailable; CSS background remains active.', error);
       return false;
@@ -214,7 +225,7 @@ export class WaterBackground {
     const requestId = ++this.imageRequest;
     this.ready = false;
     this.canvas.classList.remove('water-ready');
-    if (!source || !this.renderer || !this.background) {
+    if (!source || this.contextLost || !this.renderer || !this.background) {
       return;
     }
     const image = new Image();
@@ -232,7 +243,7 @@ export class WaterBackground {
       this.canvas.classList.remove('water-ready');
       return;
     }
-    if (requestId !== this.imageRequest) return;
+    if (requestId !== this.imageRequest || this.contextLost) return;
     this.map?.dispose();
     this.map = new THREE.Texture(image);
     this.map.colorSpace = THREE.SRGBColorSpace;
@@ -244,12 +255,15 @@ export class WaterBackground {
     this.background.material.uniforms.uImageAspect.value.set(this.mapAspect, 1);
     this.ready = true;
     this.canvas.classList.add('water-ready');
+    this.canvas.classList.remove('water-unavailable');
+    this.wake(900);
   }
 
   setBlur(value) {
     this.blur = Math.max(0, Number(value) || 0);
     this.canvas.style.setProperty('--water-blur', '0px');
     if (this.background) this.background.material.uniforms.uBackgroundBlur.value = this.blur;
+    if (this.ready) this.wake(300);
   }
 
   setTone(contrast = 1, brightness = 1) {
@@ -259,12 +273,14 @@ export class WaterBackground {
       this.background.material.uniforms.uContrast.value = this.contrast;
       this.background.material.uniforms.uBrightness.value = this.brightness;
     }
+    if (this.ready) this.wake(300);
   }
 
   addRipple(x, y, strength = 0.05) {
     if (!this.ready) return;
     this.impulses.push(new THREE.Vector3(Math.min(1, Math.max(0, x)), 1 - Math.min(1, Math.max(0, y)), Math.min(0.16, Math.max(0.01, strength))));
     if (this.impulses.length > MAX_IMPULSES) this.impulses.shift();
+    this.wake(1600);
   }
 
   resize() {
@@ -279,11 +295,46 @@ export class WaterBackground {
       this.background.material.uniforms.uViewportAspect.value = width / height;
       this.background.material.uniforms.uViewportSize.value.set(width, height);
     }
+    this.wake(500);
+  }
+
+  wake(duration = 1200) {
+    if (this.contextLost) return;
+    this.activeUntil = Math.max(this.activeUntil, performance.now() + duration);
+    if (this.running) return;
+    this.running = true;
+    this.animationFrame = requestAnimationFrame(this.render);
+  }
+
+  stop() {
+    if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
+    this.running = false;
+  }
+
+  handleContextLost(event) {
+    event.preventDefault();
+    this.contextLost = true;
+    this.ready = false;
+    this.stop();
+    this.canvas.classList.remove('water-ready');
+    this.canvas.classList.add('water-unavailable');
+    console.warn('WebGL context lost; falling back to the CSS background.');
+  }
+
+  handleContextRestored() {
+    // The existing render targets and shader resources belong to the lost context.
+    // Keep the safe CSS fallback until the page is reloaded instead of risking a
+    // second renderer and another GPU allocation on the same canvas.
+    console.warn('WebGL context restored; reload the page to re-enable ripple rendering.');
   }
 
   render(time) {
-    requestAnimationFrame((nextTime) => this.render(nextTime));
-    if (!this.renderer || !this.simulation || !this.background) return;
+    this.animationFrame = 0;
+    if (this.contextLost || !this.renderer || !this.simulation || !this.background) {
+      this.running = false;
+      return;
+    }
     const delta = Math.min(0.05, (time - this.lastTime) / 1000 || 0.016);
     this.lastTime = time;
     if (this.ready) {
@@ -311,5 +362,11 @@ export class WaterBackground {
       this.renderer.clear();
     }
     this.frame += delta;
+    const needsContentUpdate = this.ready && (this.doodleDirty || this.doodleResizePending);
+    if (this.ready && (this.impulses.length || needsContentUpdate || time < this.activeUntil)) {
+      this.animationFrame = requestAnimationFrame(this.render);
+    } else {
+      this.running = false;
+    }
   }
 }
