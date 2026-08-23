@@ -4,6 +4,7 @@ const BRUSH_PROFILES = {
   neon: { glowWidth: 18, middleWidth: 8, coreWidth: 2.2 },
   fireworks: { glowWidth: 18, middleWidth: 4, coreWidth: 2.2 },
 };
+const MAX_CLIENT_POINTS = 480;
 
 function validPoint(point) {
   return point && Number.isFinite(point.x) && Number.isFinite(point.y) && point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1;
@@ -34,17 +35,21 @@ export class DoodleCanvas {
   constructor(canvas) {
     this.canvas = canvas;
     this.context = canvas.getContext('2d');
+    this.staticCanvas = document.createElement('canvas');
+    this.staticContext = this.staticCanvas.getContext('2d');
     this.strokes = new Map();
     this.previews = new Map();
     this.activeStroke = null;
     this.authorId = '';
     this.color = '#8be9fd';
     this.style = 'neon';
+    this.staticDirty = true;
+    this.renderScheduled = false;
     this.resize = this.resize.bind(this);
     this.render = this.render.bind(this);
     window.addEventListener('resize', this.resize, { passive: true });
     this.resize();
-    requestAnimationFrame(this.render);
+    this.requestRender();
   }
 
   configure({ color, style, authorId } = {}) {
@@ -64,8 +69,13 @@ export class DoodleCanvas {
       this.canvas.style.height = `${height}px`;
     }
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    this.staticCanvas.width = this.canvas.width;
+    this.staticCanvas.height = this.canvas.height;
+    this.staticContext.setTransform(ratio, 0, 0, ratio, 0, 0);
     this.width = width;
     this.height = height;
+    this.staticDirty = true;
+    this.requestRender();
   }
 
   hydrate(strokes = [], authorId = this.authorId) {
@@ -73,12 +83,16 @@ export class DoodleCanvas {
     this.strokes.clear();
     this.previews.clear();
     strokes.filter(validStroke).forEach((stroke) => this.strokes.set(stroke.id, { ...stroke, preview: false }));
+    this.staticDirty = true;
+    this.requestRender();
   }
 
   add(stroke) {
     if (!validStroke(stroke)) return false;
     this.previews.delete(stroke.id);
     this.strokes.set(stroke.id, { ...stroke, preview: false });
+    this.staticDirty = true;
+    this.requestRender();
     return true;
   }
 
@@ -87,17 +101,22 @@ export class DoodleCanvas {
     const existing = this.previews.get(id);
     const points = phase === 'start' || !existing ? [{ x, y }] : [...existing.points, { x, y }];
     this.previews.set(id, { id, authorId: actorId, style, color, points, createdAt: createdAt || new Date().toISOString(), preview: true });
+    this.requestRender();
   }
 
   remove(id) {
     this.strokes.delete(id);
     this.previews.delete(id);
+    this.staticDirty = true;
+    this.requestRender();
   }
 
   clear() {
     this.strokes.clear();
     this.previews.clear();
     this.activeStroke = null;
+    this.staticDirty = true;
+    this.requestRender();
   }
 
   beginDraw(point) {
@@ -105,6 +124,7 @@ export class DoodleCanvas {
     const stroke = { id: `doodle_${crypto.randomUUID()}`, authorId: this.authorId, style: this.style, color: this.color, points: [point], createdAt: new Date().toISOString(), preview: true };
     this.activeStroke = stroke;
     this.previews.set(stroke.id, stroke);
+    this.requestRender();
     return stroke;
   }
 
@@ -114,8 +134,15 @@ export class DoodleCanvas {
     const last = points[points.length - 1];
     const distance = Math.hypot((point.x - last.x) * this.width, (point.y - last.y) * this.height);
     if (distance < 4) return null;
-    points.push(point);
+    if (points.length < MAX_CLIENT_POINTS) {
+      points.push(point);
+    } else {
+      const compacted = points.filter((_current, index) => index % 2 === 0);
+      compacted.push(point);
+      this.activeStroke.points = compacted;
+    }
     this.previews.set(this.activeStroke.id, this.activeStroke);
+    this.requestRender();
     return point;
   }
 
@@ -127,13 +154,20 @@ export class DoodleCanvas {
       return null;
     }
     this.previews.delete(stroke.id);
-    this.strokes.set(stroke.id, { ...stroke, preview: false });
-    return { ...stroke, preview: false };
+    const points = stroke.points.length > MAX_CLIENT_POINTS
+      ? stroke.points.filter((_current, index) => index % Math.ceil(stroke.points.length / MAX_CLIENT_POINTS) === 0)
+      : stroke.points;
+    const completed = { ...stroke, points, preview: false };
+    this.strokes.set(stroke.id, completed);
+    this.staticDirty = true;
+    this.requestRender();
+    return completed;
   }
 
   cancelDraw() {
     if (this.activeStroke) this.previews.delete(this.activeStroke.id);
     this.activeStroke = null;
+    this.requestRender();
   }
 
   beginErase() {
@@ -154,21 +188,48 @@ export class DoodleCanvas {
     }
   }
 
-  render() {
-    const now = Date.now();
-    const ctx = this.context;
-    ctx.clearRect(0, 0, this.width, this.height);
-    const all = [...this.strokes.values(), ...this.previews.values()];
-    for (const stroke of all) {
-      if (stroke.points.length < 2) continue;
-      const opacity = stroke.preview ? 0.82 : 1;
-      this.drawStroke(ctx, stroke, opacity, now);
-    }
+  requestRender() {
+    if (this.renderScheduled) return;
+    this.renderScheduled = true;
     requestAnimationFrame(this.render);
   }
 
-  drawStroke(ctx, stroke, opacity, now) {
-    const points = stroke.points.map((point) => ({ x: point.x * this.width, y: point.y * this.height }));
+  rebuildStaticLayer() {
+    const ctx = this.staticContext;
+    ctx.clearRect(0, 0, this.width, this.height);
+    for (const stroke of this.strokes.values()) this.drawTrail(ctx, stroke, 1);
+    this.staticDirty = false;
+  }
+
+  render() {
+    this.renderScheduled = false;
+    const now = Date.now();
+    const ctx = this.context;
+    if (this.staticDirty) this.rebuildStaticLayer();
+    ctx.clearRect(0, 0, this.width, this.height);
+    ctx.drawImage(this.staticCanvas, 0, 0, this.canvas.width, this.canvas.height, 0, 0, this.width, this.height);
+    for (const stroke of this.strokes.values()) {
+      if (stroke.style === 'fireworks') this.drawSparks(ctx, stroke, this.pixelPoints(stroke), 1, now);
+    }
+    for (const stroke of this.previews.values()) {
+      if (stroke.points.length < 2) continue;
+      this.drawStroke(ctx, stroke, 0.82, now);
+    }
+    if (this.previews.size || this.hasAnimatedStrokes()) this.requestRender();
+  }
+
+  hasAnimatedStrokes() {
+    for (const stroke of this.strokes.values()) if (stroke.style === 'fireworks') return true;
+    return false;
+  }
+
+  pixelPoints(stroke) {
+    return stroke.points.map((point) => ({ x: point.x * this.width, y: point.y * this.height }));
+  }
+
+  drawTrail(ctx, stroke, opacity) {
+    const points = this.pixelPoints(stroke);
+    if (points.length < 2) return;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
@@ -185,13 +246,18 @@ export class DoodleCanvas {
       ctx.globalAlpha = opacity * 0.34; ctx.lineWidth = profile.glowWidth; ctx.shadowBlur = 24; ctx.shadowColor = stroke.color; path();
       ctx.globalAlpha = opacity * 0.88; ctx.lineWidth = profile.middleWidth; ctx.shadowBlur = 10; path();
       ctx.globalAlpha = opacity; ctx.lineWidth = profile.coreWidth; ctx.shadowBlur = 4; path();
-      this.drawSparks(ctx, stroke, points, opacity, now);
     } else {
       ctx.globalAlpha = opacity * 0.2; ctx.lineWidth = profile.glowWidth; ctx.shadowBlur = 28; ctx.shadowColor = stroke.color; path();
       ctx.globalAlpha = opacity * 0.55; ctx.lineWidth = profile.middleWidth; ctx.shadowBlur = 14; ctx.shadowColor = stroke.color; path();
       ctx.globalAlpha = opacity; ctx.lineWidth = profile.coreWidth; ctx.shadowBlur = 5; ctx.shadowColor = stroke.color; path();
     }
     ctx.restore();
+  }
+
+  drawStroke(ctx, stroke, opacity, now) {
+    const points = this.pixelPoints(stroke);
+    this.drawTrail(ctx, stroke, opacity);
+    if (stroke.style === 'fireworks' && points.length >= 2) this.drawSparks(ctx, stroke, points, opacity, now);
   }
 
   drawSparks(ctx, stroke, points, opacity, now) {

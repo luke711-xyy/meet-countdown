@@ -485,7 +485,7 @@ async function handleDoodles(request: Request, env: Env, roomId: string, doodleI
     if (!/^doodle_[a-zA-Z0-9_-]{8,100}$/.test(id)) return json({ error: '涂鸦 ID 无效。' }, 400);
     if (!validDoodleStyle(style)) return json({ error: '涂鸦样式无效。' }, 400);
     if (!validDoodleColor(color)) return json({ error: '涂鸦颜色格式无效。' }, 400);
-    if (!validDoodlePoints(input.points)) return json({ error: '涂鸦轨迹无效。' }, 400);
+    if (!validDoodlePoints(input.points)) return json({ error: '涂鸦轨迹点过多或格式无效，请缩短后重试。' }, 400);
     const createdAt = nowIso();
     await env.DB.prepare(`
       INSERT INTO doodles (id, room_id, author_id, style, color, points_json, created_at)

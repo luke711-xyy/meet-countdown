@@ -1,6 +1,6 @@
 import { WaterBackground } from './water-background.js';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
-import { DoodleCanvas } from './doodle-canvas.js';
+import { DoodleCanvas } from './doodle-canvas.js?v=2';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -39,6 +39,7 @@ let lastPointerSentAt = 0;
 let lastPointer = null;
 let selectedBrushStyle = 'neon';
 let doodlePointer = null;
+const DOODLE_PREVIEW_INTERVAL = 40;
 const DEFAULT_BACKGROUND = '/default-background.png';
 const water = new WaterBackground(elements.waterCanvas);
 const doodle = new DoodleCanvas(elements.doodleCanvas);
@@ -436,7 +437,7 @@ window.addEventListener('pointermove', (event) => {
     const point = doodlePoint(event);
     if (doodlePointer.mode === 'draw') {
       const added = doodle.appendDraw(point);
-      if (added && performance.now() - doodlePointer.lastSentAt > 24) { doodlePointer.lastSentAt = performance.now(); sendDoodlePreview(doodlePointer.stroke, 'point', added); }
+      if (added && performance.now() - doodlePointer.lastSentAt > DOODLE_PREVIEW_INTERVAL) { doodlePointer.lastSentAt = performance.now(); sendDoodlePreview(doodlePointer.stroke, 'point', added); }
     } else if (doodlePointer.mode === 'erase') {
       doodle.eraseAt(point, memberId, eraseDoodle);
     }
@@ -473,6 +474,13 @@ window.addEventListener('pointercancel', (event) => {
   if (doodlePointer.mode === 'draw') doodle.cancelDraw();
   doodlePointer = null;
 });
+function cancelActiveDoodle() {
+  if (!doodlePointer) return;
+  if (doodlePointer.mode === 'draw') doodle.cancelDraw();
+  doodlePointer = null;
+}
+window.addEventListener('blur', cancelActiveDoodle);
+document.addEventListener('visibilitychange', () => { if (document.hidden) cancelActiveDoodle(); });
 window.addEventListener('contextmenu', (event) => {
   if (isDoodleSurface(event)) event.preventDefault();
 });
