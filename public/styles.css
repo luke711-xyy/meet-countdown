@@ -214,7 +214,7 @@ input[type="color"] { display: block; width: 100%; height: 38px; padding: 3px; b
 .edge-capsules::-webkit-scrollbar-thumb, .task-zone::-webkit-scrollbar-thumb { border-radius: 999px; background: oklch(1 0 0 / 0.28); }
 .voice-capsule, .task-capsule, .voice-recording-capsule, .task-composer-capsule { display: flex; align-items: center; min-height: 42px; border: 1px solid oklch(1 0 0 / 0.19); border-radius: 999px; color: var(--ink-soft); background-color: oklch(0.18 0.03 220 / 0.16); background-image: linear-gradient(135deg, oklch(1 0 0 / 0.14), oklch(1 0 0 / 0.055)); box-shadow: 0 7px 8px oklch(0 0 0 / 0.12), inset 0 1px 0 oklch(1 0 0 / 0.13); backdrop-filter: blur(16px) saturate(115%); -webkit-backdrop-filter: blur(16px) saturate(115%); backface-visibility: hidden; -webkit-backface-visibility: hidden; will-change: transform, opacity, backdrop-filter; transform: translateZ(0); }
 .voice-capsule { width: min(184px, calc(100vw - 120px)); gap: 8px; padding: 7px 10px; }
-.voice-capsule.is-mine { align-self: flex-end; transform: translate3d(-28px, 0, 0); }
+.voice-capsule.is-mine { align-self: flex-end; transform: translate3d(-96px, 0, 0); }
 .voice-capsule.is-theirs { align-self: flex-start; transform: translate3d(4px, 0, 0); }
 .task-board { position: absolute; top: 50%; right: 66px; display: grid; width: min(236px, calc(100vw - 98px)); height: min(72svh, 620px); grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; transform: translate3d(0, -50%, 0); opacity: 0; pointer-events: none; backface-visibility: hidden; -webkit-backface-visibility: hidden; will-change: opacity; transition: opacity 180ms ease; }
 .edge-rail.is-hovered .task-board { opacity: 1; pointer-events: auto; }
@@ -234,7 +234,7 @@ input[type="color"] { display: block; width: 100%; height: 38px; padding: 3px; b
 .voice-capsule.is-playing .voice-bar { animation: voice-wave var(--bar-speed) ease-in-out infinite alternate; animation-delay: var(--bar-delay); }
 .voice-time { color: var(--muted); font-size: 9px; white-space: nowrap; }
 .voice-capsule audio { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.voice-recording-capsule { position: absolute; left: 66px; top: 50%; width: 192px; gap: 8px; padding: 7px 8px 7px 12px; opacity: 0; pointer-events: auto; transform: translate3d(0, -50%, 0); transition: opacity 180ms ease; }
+.voice-recording-capsule { position: absolute; left: 78px; top: 50%; width: 192px; gap: 8px; padding: 7px 8px 7px 12px; opacity: 0; pointer-events: auto; transform: translate3d(0, -50%, 0); transition: opacity 180ms ease; }
 .edge-rail.is-recording .voice-recording-capsule { opacity: 1; }
 .capsule-pulse { width: 8px; height: 8px; border-radius: 50%; background: oklch(0.72 0.14 25); box-shadow: 0 0 0 5px oklch(0.72 0.14 25 / 0.12); animation: capsule-pulse 1.5s ease-in-out infinite; }
 .voice-recording-capsule span:nth-child(2) { flex: 1; color: var(--ink-soft); font-variant-numeric: tabular-nums; font-size: 11px; }
@@ -263,7 +263,9 @@ input[type="color"] { display: block; width: 100%; height: 38px; padding: 3px; b
   .upload-box small { width: 100%; margin-left: 41px; }
   .settings-sheet { padding: 24px 20px 22px; }
   .edge-rail { width: 100vw; }
-  .edge-rail-left .edge-capsules, .edge-rail-left .voice-recording-capsule { left: 54px; }
+  .edge-rail-left .edge-capsules { left: 54px; }
+  .edge-rail-left .voice-recording-capsule { left: 66px; }
+  .voice-capsule.is-mine { transform: translate3d(-64px, 0, 0); }
   .edge-rail-right .task-board { right: 54px; }
   .edge-rail-right .task-composer-capsule { right: 66px; }
   .edge-capsules { width: min(300px, calc(100vw - 82px)); max-height: 70svh; }
