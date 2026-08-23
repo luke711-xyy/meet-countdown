@@ -67,10 +67,12 @@ export class DoodleCanvas {
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.round(rect.width || document.documentElement.clientWidth || window.innerWidth));
     const height = Math.max(1, Math.round(rect.height || document.documentElement.clientHeight || window.innerHeight));
-    if (this.canvas.width !== Math.round(width * ratio) || this.canvas.height !== Math.round(height * ratio)) {
-      this.canvas.width = Math.round(width * ratio);
-      this.canvas.height = Math.round(height * ratio);
-    }
+    const backingWidth = Math.round(width * ratio);
+    const backingHeight = Math.round(height * ratio);
+    const changed = this.width !== width || this.height !== height || this.canvas.width !== backingWidth || this.canvas.height !== backingHeight;
+    if (!changed) return false;
+    this.canvas.width = backingWidth;
+    this.canvas.height = backingHeight;
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
     this.staticCanvas.width = this.canvas.width;
     this.staticCanvas.height = this.canvas.height;
@@ -79,6 +81,12 @@ export class DoodleCanvas {
     this.height = height;
     this.staticDirty = true;
     this.requestRender();
+    return true;
+  }
+
+  syncViewport() {
+    this.resize();
+    return { width: this.width, height: this.height };
   }
 
   hydrate(strokes = [], authorId = this.authorId) {

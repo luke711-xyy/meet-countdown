@@ -1,6 +1,6 @@
 import { WaterBackground } from './water-background.js?v=5';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
-import { DoodleCanvas } from './doodle-canvas.js?v=4';
+import { DoodleCanvas } from './doodle-canvas.js?v=5';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -72,7 +72,9 @@ function setBrushSettings(color = '#8be9fd') {
   doodle.configure({ color: safeColor, style: 'neon', authorId: memberId || '' });
 }
 
-function surfacePoint(event, canvas) {
+function surfacePoint(event) {
+  const waterRect = elements.waterCanvas.getBoundingClientRect();
+  const canvas = waterRect.width && waterRect.height ? elements.waterCanvas : elements.doodleCanvas;
   const rect = canvas.getBoundingClientRect();
   const width = rect.width || window.innerWidth;
   const height = rect.height || window.innerHeight;
@@ -83,11 +85,12 @@ function surfacePoint(event, canvas) {
 }
 
 function doodlePoint(event) {
-  return surfacePoint(event, elements.doodleCanvas);
+  doodle.syncViewport();
+  return surfacePoint(event);
 }
 
 function waterPoint(event) {
-  return surfacePoint(event, elements.waterCanvas);
+  return surfacePoint(event);
 }
 
 function isDoodleSurface(event) {
