@@ -51,7 +51,7 @@ function toInputValue(iso) { const date = new Date(iso); const offset = date.get
 function customBackground() { return state?.backgroundDataUrl || state?.backgroundUrl || null; }
 function currentBackground() { return customBackground() || DEFAULT_BACKGROUND; }
 
-function setBackground(source, blurPx, contrast = Number(elements.contrastRange?.value) || 1, brightness = Number(elements.brightnessRange?.value) || 0) {
+function setBackground(source, blurPx, contrast = Number.isFinite(Number(elements.contrastRange?.value)) ? Number(elements.contrastRange.value) : 1, brightness = Number.isFinite(Number(elements.brightnessRange?.value)) ? Number(elements.brightnessRange.value) : 1) {
   elements.background.style.backgroundImage = source ? `url("${source}")` : '';
   elements.background.style.setProperty('--background-blur', `${blurPx || 0}px`);
   water.setBlur(blurPx || 0);
@@ -61,8 +61,7 @@ function setBackground(source, blurPx, contrast = Number(elements.contrastRange?
 
 function updateToneLabels() {
   elements.contrastOutput.textContent = `${Math.round(Number(elements.contrastRange.value) * 100)}%`;
-  const brightness = Math.round(Number(elements.brightnessRange.value) * 100);
-  elements.brightnessOutput.textContent = `${brightness > 0 ? '+' : ''}${brightness}%`;
+  elements.brightnessOutput.textContent = `${Math.round(Number(elements.brightnessRange.value) * 100)}%`;
 }
 
 function setBrushSettings(color = '#8be9fd', style = 'neon') {
@@ -197,7 +196,7 @@ async function api(path, options = {}) {
 
 async function loadState() {
   try {
-    state = await api('/api/state'); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
+    state = await api('/api/state'); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
     setBrushSettings(state.brushColor, state.brushStyle); doodle.hydrate(state.doodles || [], memberId); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
   } catch (error) { elements.targetSummary.textContent = '请确认后端服务正在运行'; console.error(error); }
 }
@@ -205,7 +204,7 @@ async function loadState() {
 function openSettings() {
   if (!state) return;
   elements.saveStatus.textContent = '';
-  elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels();
+  elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels();
   setBrushSettings(state.brushColor, state.brushStyle);
   selectedBackground = customBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
   elements.fileName.textContent = selectedBackground ? '已选择照片' : '默认背景'; elements.removeBackground.classList.toggle('hidden', !selectedBackground); elements.inviteUrl.value = state.inviteUrl || `${location.origin}/?room=${encodeURIComponent(roomId || '')}`; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
@@ -233,7 +232,7 @@ async function saveSettings(event) {
     } else {
       state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
     }
-    elements.saveStatus.textContent = ''; setBrushSettings(state.brushColor, state.brushStyle); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
+    elements.saveStatus.textContent = ''; setBrushSettings(state.brushColor, state.brushStyle); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
   } catch (error) { elements.saveStatus.textContent = error.message; } finally { elements.saveButton.disabled = false; }
 }
 
@@ -296,7 +295,7 @@ function updateTaskFromEvent(task) { const item = state.tasks.find((candidate) =
 function applyRealtimeEvent(event) {
   const payload = event.payload || {};
   if (event.type === 'pointer') window.setTimeout(() => water.addRipple(payload.x, payload.y, Number(payload.strength || 0.04) * 0.72), 110);
-  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 0; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = payload.brushStyle || state.brushStyle; setBrushSettings(state.brushColor, state.brushStyle); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
+  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 1; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = payload.brushStyle || state.brushStyle; setBrushSettings(state.brushColor, state.brushStyle); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
   else if (event.type === 'background.updated') { state.backgroundUrl = payload.backgroundUrl; state.backgroundDataUrl = null; setBackground(currentBackground(), state.blurPx); }
   else if (event.type === 'task.created') { state.tasks = [...(state.tasks || []).filter((task) => task.id !== payload.id), payload]; renderTasks(); }
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);

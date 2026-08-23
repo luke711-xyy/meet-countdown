@@ -76,7 +76,8 @@ const backgroundFragment = `
     vec2 photoUv = coverUv(vUv) + vec2(horizontal, vertical) * uDisplacement;
     photoUv += center * vec2(0.0007, -0.0007);
     vec3 photo = texture2D(uMap, clamp(photoUv, 0.001, 0.999)).rgb;
-    photo = clamp(vec3(0.5) + (photo - vec3(0.5)) * uContrast + vec3(uBrightness), 0.0, 1.0);
+  photo = clamp(vec3(0.5) + (photo - vec3(0.5)) * uContrast, 0.0, 1.0);
+  photo = clamp(photo * uBrightness, 0.0, 1.0);
     gl_FragColor = vec4(photo, 1.0);
   }
 `;
@@ -94,7 +95,7 @@ export class WaterBackground {
     this.simulation = null;
     this.background = null;
     this.contrast = 1;
-    this.brightness = 0;
+    this.brightness = 1;
     this.imageRequest = 0;
     this.resizeObserver = new ResizeObserver(() => this.resize());
   }
@@ -206,9 +207,9 @@ export class WaterBackground {
     this.canvas.style.setProperty('--water-blur', `${Number(value) || 0}px`);
   }
 
-  setTone(contrast = 1, brightness = 0) {
+  setTone(contrast = 1, brightness = 1) {
     this.contrast = Number.isFinite(Number(contrast)) ? Number(contrast) : 1;
-    this.brightness = Number.isFinite(Number(brightness)) ? Number(brightness) : 0;
+    this.brightness = Number.isFinite(Number(brightness)) ? Number(brightness) : 1;
     if (this.background) {
       this.background.material.uniforms.uContrast.value = this.contrast;
       this.background.material.uniforms.uBrightness.value = this.brightness;

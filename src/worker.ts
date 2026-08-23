@@ -230,8 +230,8 @@ async function ensureRoom(env: Env, roomId: string, user: AuthUser) {
   const targetAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   await env.DB.batch([
     env.DB.prepare(`
-      INSERT INTO rooms (id, target_at, blur_px, background_key, created_at, updated_at)
-      VALUES (?1, ?2, 0, NULL, ?3, ?3)
+      INSERT INTO rooms (id, target_at, blur_px, background_key, contrast, brightness, created_at, updated_at)
+      VALUES (?1, ?2, 0, NULL, 1.0, 1.0, ?3, ?3)
     `).bind(roomId, targetAt, timestamp),
     env.DB.prepare('INSERT INTO room_members (room_id, user_id, slot, joined_at) VALUES (?1, ?2, 0, ?3)').bind(roomId, user.id, timestamp),
   ]);
@@ -374,15 +374,15 @@ async function handleSettings(request: Request, env: Env, roomId: string, user: 
   const targetAt = new Date(input.targetAt || '');
   const blurPx = Number(input.blurPx);
   const contrast = input.contrast === undefined ? 1 : Number(input.contrast);
-  const brightness = input.brightness === undefined ? 0 : Number(input.brightness);
+  const brightness = input.brightness === undefined ? 1 : Number(input.brightness);
   const currentBrush = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle FROM users WHERE id = ?1')
     .bind(user.id).first<{ brushColor: string; brushStyle: string }>();
   const brushColor = input.brushColor === undefined ? (currentBrush?.brushColor || '#8be9fd') : String(input.brushColor);
   const brushStyle = input.brushStyle === undefined ? (currentBrush?.brushStyle || 'neon') : String(input.brushStyle);
   if (Number.isNaN(targetAt.getTime())) return json({ error: '请输入有效的见面时间。' }, 400);
   if (!Number.isInteger(blurPx) || blurPx < 0 || blurPx > 24) return json({ error: '背景模糊度需要在 0 到 24 之间。' }, 400);
-  if (!Number.isFinite(contrast) || contrast < 0.75 || contrast > 1.25) return json({ error: '背景对比度需要在 75% 到 125% 之间。' }, 400);
-  if (!Number.isFinite(brightness) || brightness < -0.15 || brightness > 0.15) return json({ error: '背景亮度需要在 -15% 到 15% 之间。' }, 400);
+  if (!Number.isFinite(contrast) || contrast < 0 || contrast > 2) return json({ error: '背景对比度需要在 0% 到 200% 之间。' }, 400);
+  if (!Number.isFinite(brightness) || brightness < 0 || brightness > 2) return json({ error: '背景亮度需要在 0% 到 200% 之间。' }, 400);
   if (!validDoodleColor(brushColor)) return json({ error: '涂鸦颜色格式无效。' }, 400);
   if (!validDoodleStyle(brushStyle)) return json({ error: '涂鸦样式无效。' }, 400);
   const updatedAt = nowIso();
