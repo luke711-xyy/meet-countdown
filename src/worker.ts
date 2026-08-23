@@ -22,7 +22,6 @@ const ROOM_PATTERN = /^room_[a-z0-9]{10}$/;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 const MAX_DOODLE_POINTS = 800;
-const DOODLE_TTL_MS = 24 * 60 * 60 * 1000;
 const DOODLE_STYLES = new Set(['neon', 'fireworks']);
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const AUTH_COOKIE = 'meet_auth';
@@ -50,7 +49,6 @@ async function clearEphemeralData(env: Env) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM voice_notes'),
     env.DB.prepare('DELETE FROM tasks'),
-    env.DB.prepare('DELETE FROM doodles'),
   ]);
 
   const rooms = await env.DB.prepare('SELECT id FROM rooms').all<{ id: string }>();
@@ -267,13 +265,12 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     )
     ORDER BY createdAt ASC, id ASC
   `).bind(roomId).all();
-  const doodleCutoff = new Date(Date.now() - DOODLE_TTL_MS).toISOString();
   const doodleResult = await env.DB.prepare(`
     SELECT id, author_id AS authorId, style, color, points_json AS pointsJson, created_at AS createdAt
     FROM doodles
-    WHERE room_id = ?1 AND created_at > ?2
+    WHERE room_id = ?1
     ORDER BY created_at ASC, id ASC
-  `).bind(roomId, doodleCutoff).all();
+  `).bind(roomId).all();
   const membersResult = await env.DB.prepare(`
     SELECT users.id AS id, users.username AS username, room_members.slot AS slot
     FROM room_members JOIN users ON users.id = room_members.user_id

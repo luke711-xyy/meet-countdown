@@ -307,7 +307,7 @@ function applyRealtimeEvent(event) {
   else if (event.type === 'doodle.deleted') { state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== payload.id); doodle.remove(payload.id); }
   else if (event.type === 'room.joined') { state.members = [...(state.members || []).filter((member) => member.id !== payload.userId), { id: payload.userId, username: payload.username, slot: payload.slot }].sort((a, b) => a.slot - b.slot); elements.roomMembers.textContent = `${state.members.length} / 2`; showToast(`${payload.username || '对方'} 已加入房间`); }
   else if (event.type === 'room.destroyed') { state = null; socket?.close(); socket = null; showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
-  else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; state.doodles = []; doodle.clear(); renderTasks(); renderVoiceNotes(); }
+  else if (event.type === 'ephemeral.cleared') { state.tasks = []; state.voiceNotes = []; renderTasks(); renderVoiceNotes(); }
 }
 
 function connectRealtime() {

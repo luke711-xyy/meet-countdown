@@ -1,6 +1,9 @@
-const TTL_MS = 24 * 60 * 60 * 1000;
 const STYLES = new Set(['neon', 'fireworks']);
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+const BRUSH_PROFILES = {
+  neon: { glowWidth: 18, middleWidth: 8, coreWidth: 2.2 },
+  fireworks: { glowWidth: 18, middleWidth: 4, coreWidth: 2.2 },
+};
 
 function validPoint(point) {
   return point && Number.isFinite(point.x) && Number.isFinite(point.y) && point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1;
@@ -157,15 +160,8 @@ export class DoodleCanvas {
     ctx.clearRect(0, 0, this.width, this.height);
     const all = [...this.strokes.values(), ...this.previews.values()];
     for (const stroke of all) {
-      const created = new Date(stroke.createdAt).getTime();
-      const age = Number.isFinite(created) ? Math.max(0, now - created) : 0;
-      if (age >= TTL_MS) {
-        this.strokes.delete(stroke.id);
-        this.previews.delete(stroke.id);
-        continue;
-      }
       if (stroke.points.length < 2) continue;
-      const opacity = Math.max(0, 1 - age / TTL_MS) * (stroke.preview ? 0.82 : 1);
+      const opacity = stroke.preview ? 0.82 : 1;
       this.drawStroke(ctx, stroke, opacity, now);
     }
     requestAnimationFrame(this.render);
@@ -178,6 +174,7 @@ export class DoodleCanvas {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = stroke.color;
+    const profile = BRUSH_PROFILES[stroke.style] || BRUSH_PROFILES.neon;
     const path = () => {
       ctx.beginPath();
       ctx.moveTo(points[0].x, points[0].y);
@@ -185,14 +182,14 @@ export class DoodleCanvas {
       ctx.stroke();
     };
     if (stroke.style === 'fireworks') {
-      ctx.globalAlpha = opacity * 0.3; ctx.lineWidth = 15; ctx.shadowBlur = 24; ctx.shadowColor = stroke.color; path();
-      ctx.globalAlpha = opacity * 0.86; ctx.lineWidth = 3; ctx.shadowBlur = 10; path();
-      ctx.globalAlpha = opacity; ctx.lineWidth = 1.25; ctx.shadowBlur = 4; path();
+      ctx.globalAlpha = opacity * 0.34; ctx.lineWidth = profile.glowWidth; ctx.shadowBlur = 24; ctx.shadowColor = stroke.color; path();
+      ctx.globalAlpha = opacity * 0.88; ctx.lineWidth = profile.middleWidth; ctx.shadowBlur = 10; path();
+      ctx.globalAlpha = opacity; ctx.lineWidth = profile.coreWidth; ctx.shadowBlur = 4; path();
       this.drawSparks(ctx, stroke, points, opacity, now);
     } else {
-      ctx.globalAlpha = opacity * 0.2; ctx.lineWidth = 18; ctx.shadowBlur = 28; ctx.shadowColor = stroke.color; path();
-      ctx.globalAlpha = opacity * 0.55; ctx.lineWidth = 8; ctx.shadowBlur = 14; path();
-      ctx.globalAlpha = opacity; ctx.lineWidth = 2.2; ctx.shadowBlur = 5; path();
+      ctx.globalAlpha = opacity * 0.2; ctx.lineWidth = profile.glowWidth; ctx.shadowBlur = 28; ctx.shadowColor = stroke.color; path();
+      ctx.globalAlpha = opacity * 0.55; ctx.lineWidth = profile.middleWidth; ctx.shadowBlur = 14; ctx.shadowColor = stroke.color; path();
+      ctx.globalAlpha = opacity; ctx.lineWidth = profile.coreWidth; ctx.shadowBlur = 5; ctx.shadowColor = stroke.color; path();
     }
     ctx.restore();
   }
@@ -204,22 +201,28 @@ export class DoodleCanvas {
     ctx.strokeStyle = stroke.color;
     ctx.fillStyle = stroke.color;
     ctx.lineCap = 'round';
-    for (let index = 2; index < points.length; index += 3) {
+    const sampleStep = Math.max(1, Math.ceil(points.length / 120));
+    for (let index = 1; index < points.length; index += sampleStep) {
       const point = points[index];
-      const count = 3 + Math.floor(random() * 4);
+      const count = 8 + Math.floor(random() * 6);
       for (let spark = 0; spark < count; spark += 1) {
         const angle = random() * Math.PI * 2;
-        const phase = (elapsed / 1100 + random()) % 1;
-        const length = (5 + random() * 14) * (1 - phase);
-        ctx.globalAlpha = opacity * (1 - phase) * 0.75;
-        ctx.lineWidth = 1 + random() * 1.2;
-        ctx.shadowBlur = 8;
+        const phase = (elapsed / 1050 + random() * 0.65) % 1;
+        const length = (7 + random() * 17) * (1 - phase * 0.82);
+        ctx.globalAlpha = opacity * (0.34 + (1 - phase) * 0.56);
+        ctx.lineWidth = 1.1 + random() * 1.4;
+        ctx.shadowBlur = 9;
         ctx.shadowColor = stroke.color;
         ctx.beginPath();
         ctx.moveTo(point.x + Math.cos(angle) * length * 0.18, point.y + Math.sin(angle) * length * 0.18);
         ctx.lineTo(point.x + Math.cos(angle) * length, point.y + Math.sin(angle) * length);
         ctx.stroke();
       }
+      ctx.globalAlpha = opacity * 0.72;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 1.5 + random() * 1.5, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
   }
