@@ -45,6 +45,7 @@ export class DoodleCanvas {
     this.style = 'neon';
     this.staticDirty = true;
     this.renderScheduled = false;
+    this.revision = 0;
     this.resize = this.resize.bind(this);
     this.render = this.render.bind(this);
     window.addEventListener('resize', this.resize, { passive: true });
@@ -215,6 +216,7 @@ export class DoodleCanvas {
       if (stroke.points.length < 2) continue;
       this.drawStroke(ctx, stroke, 0.82, now);
     }
+    this.revision += 1;
     if (this.previews.size || this.hasAnimatedStrokes()) this.requestRender();
   }
 

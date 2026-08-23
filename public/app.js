@@ -1,4 +1,4 @@
-import { WaterBackground } from './water-background.js';
+import { WaterBackground } from './water-background.js?v=2';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
 import { DoodleCanvas } from './doodle-canvas.js?v=2';
 
@@ -41,8 +41,8 @@ let selectedBrushStyle = 'neon';
 let doodlePointer = null;
 const DOODLE_PREVIEW_INTERVAL = 40;
 const DEFAULT_BACKGROUND = '/default-background.png';
-const water = new WaterBackground(elements.waterCanvas);
 const doodle = new DoodleCanvas(elements.doodleCanvas);
+const water = new WaterBackground(elements.waterCanvas, elements.doodleCanvas);
 
 function pad(value) { return String(value).padStart(2, '0'); }
 function formatDate(date) { return new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(date); }

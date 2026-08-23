@@ -46,6 +46,7 @@ const backgroundFragment = `
   precision highp float;
   varying vec2 vUv;
   uniform sampler2D uMap;
+  uniform sampler2D uDoodle;
   uniform sampler2D uRipple;
   uniform vec2 uRippleTexel;
   uniform vec2 uImageAspect;
@@ -53,6 +54,7 @@ const backgroundFragment = `
   uniform float uDisplacement;
   uniform float uContrast;
   uniform float uBrightness;
+  uniform float uDoodleOpacity;
 
   vec2 coverUv(vec2 uv) {
     float viewportRatio = uViewportAspect;
@@ -76,17 +78,24 @@ const backgroundFragment = `
     vec2 photoUv = coverUv(vUv) + vec2(horizontal, vertical) * uDisplacement;
     photoUv += center * vec2(0.0007, -0.0007);
     vec3 photo = texture2D(uMap, clamp(photoUv, 0.001, 0.999)).rgb;
-  photo = clamp(vec3(0.5) + (photo - vec3(0.5)) * uContrast, 0.0, 1.0);
-  photo = clamp(photo * uBrightness, 0.0, 1.0);
-    gl_FragColor = vec4(photo, 1.0);
+    photo = clamp(vec3(0.5) + (photo - vec3(0.5)) * uContrast, 0.0, 1.0);
+    photo = clamp(photo * uBrightness, 0.0, 1.0);
+    vec2 doodleUv = clamp(vUv + vec2(horizontal, vertical) * uDisplacement, 0.001, 0.999);
+    vec4 doodle = texture2D(uDoodle, doodleUv);
+    float doodleAlpha = clamp(doodle.a * uDoodleOpacity, 0.0, 1.0);
+    vec3 composited = mix(photo, doodle.rgb, doodleAlpha);
+    gl_FragColor = vec4(composited, 1.0);
   }
 `;
 
 export class WaterBackground {
-  constructor(canvas) {
+  constructor(canvas, doodleCanvas) {
     this.canvas = canvas;
+    this.doodleCanvas = doodleCanvas;
     this.renderer = null;
     this.map = null;
+    this.doodleTexture = null;
+    this.doodleRevision = -1;
     this.mapAspect = 1;
     this.ready = false;
     this.impulses = [];
@@ -107,6 +116,13 @@ export class WaterBackground {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8));
       this.renderer.setClearColor(0x000000, 0);
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+      this.doodleTexture = new THREE.CanvasTexture(this.doodleCanvas);
+      this.doodleTexture.colorSpace = THREE.SRGBColorSpace;
+      this.doodleTexture.minFilter = THREE.LinearFilter;
+      this.doodleTexture.magFilter = THREE.LinearFilter;
+      this.doodleTexture.wrapS = THREE.ClampToEdgeWrapping;
+      this.doodleTexture.wrapT = THREE.ClampToEdgeWrapping;
+      this.doodleTexture.needsUpdate = true;
       const quad = new THREE.PlaneGeometry(2, 2);
       this.simulation = this.createSimulation(quad);
       this.background = this.createBackground(quad);
@@ -151,6 +167,7 @@ export class WaterBackground {
     const material = new THREE.ShaderMaterial({
       uniforms: {
         uMap: { value: null },
+        uDoodle: { value: this.doodleTexture },
         uRipple: { value: this.simulation.targets[0].texture },
         uRippleTexel: { value: new THREE.Vector2(1 / SIM_SIZE, 1 / SIM_SIZE) },
         uImageAspect: { value: new THREE.Vector2(1, 1) },
@@ -158,6 +175,7 @@ export class WaterBackground {
         uDisplacement: { value: 0.12 },
         uContrast: { value: this.contrast },
         uBrightness: { value: this.brightness },
+        uDoodleOpacity: { value: 0.94 },
       },
       vertexShader: passthroughVertex,
       fragmentShader: backgroundFragment,
@@ -234,6 +252,10 @@ export class WaterBackground {
     const delta = Math.min(0.05, (time - this.lastTime) / 1000 || 0.016);
     this.lastTime = time;
     if (this.ready) {
+      if (this.doodleTexture && this.doodleCanvas && this.doodleRevision !== this.doodleCanvas.revision) {
+        this.doodleTexture.needsUpdate = true;
+        this.doodleRevision = this.doodleCanvas.revision;
+      }
       const sim = this.simulation;
       const next = 1 - sim.current;
       sim.material.uniforms.uState.value = sim.targets[sim.current].texture;
