@@ -217,6 +217,7 @@ export class DoodleCanvas {
       this.drawStroke(ctx, stroke, 0.82, now);
     }
     this.revision += 1;
+    this.canvas.dispatchEvent(new Event('doodle-render'));
     if (this.previews.size || this.hasAnimatedStrokes()) this.requestRender();
   }
 

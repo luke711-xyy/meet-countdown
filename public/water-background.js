@@ -54,6 +54,8 @@ const backgroundFragment = `
   uniform float uDisplacement;
   uniform float uContrast;
   uniform float uBrightness;
+  uniform float uBackgroundBlur;
+  uniform vec2 uViewportSize;
   uniform float uDoodleOpacity;
 
   vec2 coverUv(vec2 uv) {
@@ -78,6 +80,20 @@ const backgroundFragment = `
     vec2 photoUv = coverUv(vUv) + vec2(horizontal, vertical) * uDisplacement;
     photoUv += center * vec2(0.0007, -0.0007);
     vec3 photo = texture2D(uMap, clamp(photoUv, 0.001, 0.999)).rgb;
+    if (uBackgroundBlur > 0.0) {
+      vec2 blurStep = uBackgroundBlur * vec2(1.0 / uViewportSize.x, 1.0 / uViewportSize.y) * 1.35;
+      photo = (
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(-1.0, -1.0), 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(0.0, -1.0), 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(1.0, -1.0), 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(-1.0, 0.0), 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv, 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(1.0, 0.0), 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(-1.0, 1.0), 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(0.0, 1.0), 0.001, 0.999)).rgb +
+        texture2D(uMap, clamp(photoUv + blurStep * vec2(1.0, 1.0), 0.001, 0.999)).rgb
+      ) / 9.0;
+    }
     photo = clamp(vec3(0.5) + (photo - vec3(0.5)) * uContrast, 0.0, 1.0);
     photo = clamp(photo * uBrightness, 0.0, 1.0);
     vec2 doodleUv = clamp(vUv + vec2(horizontal, vertical) * uDisplacement, 0.001, 0.999);
@@ -95,7 +111,7 @@ export class WaterBackground {
     this.renderer = null;
     this.map = null;
     this.doodleTexture = null;
-    this.doodleRevision = -1;
+    this.doodleDirty = true;
     this.mapAspect = 1;
     this.ready = false;
     this.impulses = [];
@@ -105,8 +121,10 @@ export class WaterBackground {
     this.background = null;
     this.contrast = 1;
     this.brightness = 1;
+    this.blur = 0;
     this.imageRequest = 0;
     this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.doodleCanvas?.addEventListener('doodle-render', () => { this.doodleDirty = true; });
   }
 
   async init() {
@@ -120,6 +138,7 @@ export class WaterBackground {
       this.doodleTexture.colorSpace = THREE.SRGBColorSpace;
       this.doodleTexture.minFilter = THREE.LinearFilter;
       this.doodleTexture.magFilter = THREE.LinearFilter;
+      this.doodleTexture.generateMipmaps = false;
       this.doodleTexture.wrapS = THREE.ClampToEdgeWrapping;
       this.doodleTexture.wrapT = THREE.ClampToEdgeWrapping;
       this.doodleTexture.needsUpdate = true;
@@ -175,6 +194,8 @@ export class WaterBackground {
         uDisplacement: { value: 0.12 },
         uContrast: { value: this.contrast },
         uBrightness: { value: this.brightness },
+        uBackgroundBlur: { value: this.blur },
+        uViewportSize: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
         uDoodleOpacity: { value: 0.94 },
       },
       vertexShader: passthroughVertex,
@@ -222,7 +243,9 @@ export class WaterBackground {
   }
 
   setBlur(value) {
-    this.canvas.style.setProperty('--water-blur', `${Number(value) || 0}px`);
+    this.blur = Math.max(0, Number(value) || 0);
+    this.canvas.style.setProperty('--water-blur', '0px');
+    if (this.background) this.background.material.uniforms.uBackgroundBlur.value = this.blur;
   }
 
   setTone(contrast = 1, brightness = 1) {
@@ -243,7 +266,10 @@ export class WaterBackground {
   resize() {
     if (!this.renderer) return;
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
-    if (this.background) this.background.material.uniforms.uViewportAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
+    if (this.background) {
+      this.background.material.uniforms.uViewportAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
+      this.background.material.uniforms.uViewportSize.value.set(window.innerWidth, window.innerHeight);
+    }
   }
 
   render(time) {
@@ -252,9 +278,9 @@ export class WaterBackground {
     const delta = Math.min(0.05, (time - this.lastTime) / 1000 || 0.016);
     this.lastTime = time;
     if (this.ready) {
-      if (this.doodleTexture && this.doodleCanvas && this.doodleRevision !== this.doodleCanvas.revision) {
+      if (this.doodleTexture && this.doodleCanvas && this.doodleDirty) {
         this.doodleTexture.needsUpdate = true;
-        this.doodleRevision = this.doodleCanvas.revision;
+        this.doodleDirty = false;
       }
       const sim = this.simulation;
       const next = 1 - sim.current;
