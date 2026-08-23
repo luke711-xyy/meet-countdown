@@ -101,6 +101,7 @@ const backgroundFragment = `
     float doodleAlpha = clamp(doodle.a * uDoodleOpacity, 0.0, 1.0);
     vec3 composited = mix(photo, doodle.rgb, doodleAlpha);
     gl_FragColor = vec4(composited, 1.0);
+    #include <colorspace_fragment>
   }
 `;
 
@@ -134,6 +135,7 @@ export class WaterBackground {
       if (!this.renderer.capabilities.isWebGL2) throw new Error('WebGL2 is required for the ripple field.');
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.8));
       this.renderer.setClearColor(0x000000, 0);
+      this.renderer.toneMapping = THREE.NoToneMapping;
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
       this.doodleTexture = new THREE.CanvasTexture(this.doodleCanvas);
       this.doodleTexture.colorSpace = THREE.SRGBColorSpace;
@@ -202,6 +204,7 @@ export class WaterBackground {
       vertexShader: passthroughVertex,
       fragmentShader: backgroundFragment,
     });
+    material.toneMapped = false;
     const scene = new THREE.Scene();
     scene.add(new THREE.Mesh(quad, material));
     return { material, scene, camera: new THREE.Camera() };

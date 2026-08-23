@@ -1,4 +1,4 @@
-import { WaterBackground } from './water-background.js?v=5';
+import { WaterBackground } from './water-background.js?v=6';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
 import { DoodleCanvas } from './doodle-canvas.js?v=5';
 
