@@ -100,8 +100,8 @@
         <div class="task-divider" aria-hidden="true"></div>
         <section class="task-zone task-zone-mine" aria-label="我的任务"><div class="task-list" id="task-list-mine"></div></section>
       </div>
-      <form class="task-composer-capsule hidden" id="task-form">
-        <input id="task-input" type="text" maxlength="120" placeholder="写下一件小事" aria-label="新任务" /><button class="capsule-cancel" id="cancel-task" type="button">取消</button><button class="task-submit" type="submit" aria-label="添加任务">＋</button>
+      <form class="task-composer-capsule hidden" id="task-form" autocomplete="off">
+        <input id="task-input" type="text" maxlength="120" placeholder="写下一件小事" aria-label="新任务" autocomplete="off" autocapitalize="none" spellcheck="false" /><button class="capsule-cancel" id="cancel-task" type="button">取消</button><button class="task-submit" type="submit" aria-label="添加任务">＋</button>
       </form>
       <div class="edge-hover-bridge" aria-hidden="true"></div>
       <button class="edge-orb" id="task-orb" type="button" aria-expanded="false" aria-label="点击添加任务">
