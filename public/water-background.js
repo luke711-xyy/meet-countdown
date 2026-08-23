@@ -112,6 +112,7 @@ export class WaterBackground {
     this.map = null;
     this.doodleTexture = null;
     this.doodleDirty = true;
+    this.doodleResizePending = false;
     this.mapAspect = 1;
     this.ready = false;
     this.impulses = [];
@@ -266,6 +267,8 @@ export class WaterBackground {
   resize() {
     if (!this.renderer) return;
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
+    this.doodleResizePending = true;
+    this.doodleDirty = true;
     if (this.background) {
       this.background.material.uniforms.uViewportAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
       this.background.material.uniforms.uViewportSize.value.set(window.innerWidth, window.innerHeight);
@@ -278,6 +281,10 @@ export class WaterBackground {
     const delta = Math.min(0.05, (time - this.lastTime) / 1000 || 0.016);
     this.lastTime = time;
     if (this.ready) {
+      if (this.doodleResizePending && this.doodleCanvas?.flush) {
+        this.doodleCanvas.flush();
+        this.doodleResizePending = false;
+      }
       if (this.doodleTexture && this.doodleCanvas && this.doodleDirty) {
         this.doodleTexture.needsUpdate = true;
         this.doodleDirty = false;

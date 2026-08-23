@@ -1,6 +1,6 @@
-import { WaterBackground } from './water-background.js?v=3';
+import { WaterBackground } from './water-background.js?v=4';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
-import { DoodleCanvas } from './doodle-canvas.js?v=2';
+import { DoodleCanvas } from './doodle-canvas.js?v=3';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {

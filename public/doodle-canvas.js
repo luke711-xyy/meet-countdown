@@ -45,6 +45,7 @@ export class DoodleCanvas {
     this.style = 'neon';
     this.staticDirty = true;
     this.renderScheduled = false;
+    this.renderFrame = 0;
     this.revision = 0;
     this.resize = this.resize.bind(this);
     this.render = this.render.bind(this);
@@ -192,7 +193,13 @@ export class DoodleCanvas {
   requestRender() {
     if (this.renderScheduled) return;
     this.renderScheduled = true;
-    requestAnimationFrame(this.render);
+    this.renderFrame = requestAnimationFrame(this.render);
+  }
+
+  flush() {
+    if (this.renderScheduled) cancelAnimationFrame(this.renderFrame);
+    this.renderScheduled = false;
+    this.render();
   }
 
   rebuildStaticLayer() {
