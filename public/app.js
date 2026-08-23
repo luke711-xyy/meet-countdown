@@ -6,10 +6,10 @@ const $ = (selector) => document.querySelector(selector);
 const elements = {
   authGate: $('#auth-gate'), authIntro: $('#auth-intro'), authForm: $('#auth-form'), authUsername: $('#auth-username'), authPassword: $('#auth-password'), authStatus: $('#auth-status'), authSubmit: $('#auth-submit'), loginTab: $('#login-tab'), registerTab: $('#register-tab'), roomGate: $('#room-gate'), roomGateMessage: $('#room-gate-message'), createRoomButton: $('#create-room-button'), accountName: $('#account-name'),
   background: $('.background-layer'), waterCanvas: $('#water-canvas'), doodleCanvas: $('#doodle-canvas'), targetSummary: $('#target-summary'),
-  days: $('#days'), hours: $('#hours'), minutes: $('#minutes'), seconds: $('#seconds'), currentTime: $('#current-time'),
+  days: $('#days'), hours: $('#hours'), minutes: $('#minutes'), seconds: $('#seconds'), currentTime: $('#current-time'), slogan: $('#slogan'),
   timezoneLabel: $('#timezone-label'), dialog: $('#settings-dialog'), form: $('#settings-form'), targetAt: $('#target-at'),
   chooseBackground: $('#choose-background'), fileName: $('#file-name'), removeBackground: $('#remove-background'),
-  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), brushColor: $('#brush-color'), brushColorOutput: $('#brush-color-output'), brushStyleNeon: $('#brush-style-neon'), brushStyleFireworks: $('#brush-style-fireworks'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
+  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), sloganInput: $('#slogan-input'), sloganCount: $('#slogan-count'), brushColor: $('#brush-color'), brushColorOutput: $('#brush-color-output'), brushStyleNeon: $('#brush-style-neon'), brushStyleFireworks: $('#brush-style-fireworks'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
   voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), cancelVoice: $('#cancel-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
   taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), cancelTask: $('#cancel-task'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
@@ -118,6 +118,7 @@ function render() {
   elements.minutes.textContent = pad(minutes); elements.seconds.textContent = pad(seconds);
   elements.targetSummary.textContent = remainingMs > 0 ? `${formatDate(target)} · ${state.timeZone || '本地时间'}` : '现在就去见面吧';
   elements.currentTime.textContent = `现在是 ${formatCurrentTime(now)}`;
+  elements.slogan.textContent = state.slogan ?? '把想念留给时间';
 }
 
 function showToast(message) {
@@ -205,6 +206,7 @@ function openSettings() {
   if (!state) return;
   elements.saveStatus.textContent = '';
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels();
+  elements.sloganInput.value = state.slogan ?? '把想念留给时间'; elements.sloganCount.textContent = `${elements.sloganInput.value.length}/20`;
   setBrushSettings(state.brushColor, state.brushStyle);
   selectedBackground = customBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
   elements.fileName.textContent = selectedBackground ? '已选择照片' : '默认背景'; elements.removeBackground.classList.toggle('hidden', !selectedBackground); elements.inviteUrl.value = state.inviteUrl || `${location.origin}/?room=${encodeURIComponent(roomId || '')}`; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
@@ -228,9 +230,9 @@ async function saveSettings(event) {
     if (roomId) {
       if (backgroundSelection === 'upload' && selectedBackgroundFile) await api('/api/background', { method: 'PUT', headers: { 'Content-Type': selectedBackgroundFile.type }, body: selectedBackgroundFile });
       else if (backgroundSelection === 'remove') await api('/api/background', { method: 'DELETE' });
-      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
+      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
     } else {
-      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
+      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
     }
     elements.saveStatus.textContent = ''; setBrushSettings(state.brushColor, state.brushStyle); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
   } catch (error) { elements.saveStatus.textContent = error.message; } finally { elements.saveButton.disabled = false; }
@@ -295,7 +297,7 @@ function updateTaskFromEvent(task) { const item = state.tasks.find((candidate) =
 function applyRealtimeEvent(event) {
   const payload = event.payload || {};
   if (event.type === 'pointer') window.setTimeout(() => water.addRipple(payload.x, payload.y, Number(payload.strength || 0.04) * 0.72), 110);
-  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 1; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = payload.brushStyle || state.brushStyle; setBrushSettings(state.brushColor, state.brushStyle); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
+  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 1; state.slogan = payload.slogan ?? state.slogan ?? '把想念留给时间'; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = payload.brushStyle || state.brushStyle; setBrushSettings(state.brushColor, state.brushStyle); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
   else if (event.type === 'background.updated') { state.backgroundUrl = payload.backgroundUrl; state.backgroundDataUrl = null; setBackground(currentBackground(), state.blurPx); }
   else if (event.type === 'task.created') { state.tasks = [...(state.tasks || []).filter((task) => task.id !== payload.id), payload]; renderTasks(); }
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);
@@ -410,6 +412,7 @@ async function logout() {
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
 elements.contrastRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
 elements.brightnessRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
+elements.sloganInput.addEventListener('input', () => { elements.sloganCount.textContent = `${elements.sloganInput.value.length}/20`; });
 elements.brushColor.addEventListener('input', () => { elements.brushColorOutput.textContent = elements.brushColor.value.toUpperCase(); doodle.configure({ color: elements.brushColor.value }); });
 elements.brushStyleNeon.addEventListener('click', () => setBrushSettings(elements.brushColor.value, 'neon'));
 elements.brushStyleFireworks.addEventListener('click', () => setBrushSettings(elements.brushColor.value, 'fireworks'));

@@ -230,8 +230,8 @@ async function ensureRoom(env: Env, roomId: string, user: AuthUser) {
   const targetAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   await env.DB.batch([
     env.DB.prepare(`
-      INSERT INTO rooms (id, target_at, blur_px, background_key, contrast, brightness, created_at, updated_at)
-      VALUES (?1, ?2, 0, NULL, 1.0, 1.0, ?3, ?3)
+      INSERT INTO rooms (id, target_at, blur_px, background_key, contrast, brightness, slogan, created_at, updated_at)
+      VALUES (?1, ?2, 0, NULL, 1.0, 1.0, '把想念留给时间', ?3, ?3)
     `).bind(roomId, targetAt, timestamp),
     env.DB.prepare('INSERT INTO room_members (room_id, user_id, slot, joined_at) VALUES (?1, ?2, 0, ?3)').bind(roomId, user.id, timestamp),
   ]);
@@ -239,9 +239,9 @@ async function ensureRoom(env: Env, roomId: string, user: AuthUser) {
 
 async function roomState(env: Env, request: Request, roomId: string, user: AuthUser) {
   const room = await env.DB.prepare(`
-    SELECT id, target_at AS targetAt, blur_px AS blurPx, contrast, brightness, background_key AS backgroundKey, updated_at AS updatedAt
+    SELECT id, target_at AS targetAt, blur_px AS blurPx, contrast, brightness, slogan, background_key AS backgroundKey, updated_at AS updatedAt
     FROM rooms WHERE id = ?1
-  `).bind(roomId).first<{ id: string; targetAt: string; blurPx: number; contrast: number; brightness: number; backgroundKey: string | null; updatedAt: string }>();
+  `).bind(roomId).first<{ id: string; targetAt: string; blurPx: number; contrast: number; brightness: number; slogan: string; backgroundKey: string | null; updatedAt: string }>();
   if (!room) return null;
 
   const membership = await roomMember(env, roomId, user.id);
@@ -283,6 +283,7 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     blurPx: room.blurPx,
     contrast: room.contrast,
     brightness: room.brightness,
+    slogan: room.slogan ?? '把想念留给时间',
     brushColor: brushSettings?.brushColor || '#8be9fd',
     brushStyle: validDoodleStyle(brushSettings?.brushStyle) ? brushSettings.brushStyle : 'neon',
     backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}&v=${encodeURIComponent(room.updatedAt)}` : null,
@@ -370,11 +371,13 @@ async function destroyRoom(env: Env, roomId: string, user: AuthUser) {
 }
 
 async function handleSettings(request: Request, env: Env, roomId: string, user: AuthUser) {
-  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number; brushColor?: string; brushStyle?: string }>(request);
+  const input = await bodyJson<{ targetAt?: string; blurPx?: number; contrast?: number; brightness?: number; slogan?: string; brushColor?: string; brushStyle?: string }>(request);
   const targetAt = new Date(input.targetAt || '');
   const blurPx = Number(input.blurPx);
   const contrast = input.contrast === undefined ? 1 : Number(input.contrast);
   const brightness = input.brightness === undefined ? 1 : Number(input.brightness);
+  const currentSlogan = await env.DB.prepare('SELECT slogan FROM rooms WHERE id = ?1').bind(roomId).first<{ slogan: string }>();
+  const slogan = input.slogan === undefined ? (currentSlogan?.slogan || '把想念留给时间') : String(input.slogan).trim();
   const currentBrush = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle FROM users WHERE id = ?1')
     .bind(user.id).first<{ brushColor: string; brushStyle: string }>();
   const brushColor = input.brushColor === undefined ? (currentBrush?.brushColor || '#8be9fd') : String(input.brushColor);
@@ -383,16 +386,17 @@ async function handleSettings(request: Request, env: Env, roomId: string, user: 
   if (!Number.isInteger(blurPx) || blurPx < 0 || blurPx > 24) return json({ error: '背景模糊度需要在 0 到 24 之间。' }, 400);
   if (!Number.isFinite(contrast) || contrast < 0 || contrast > 2) return json({ error: '背景对比度需要在 0% 到 200% 之间。' }, 400);
   if (!Number.isFinite(brightness) || brightness < 0 || brightness > 2) return json({ error: '背景亮度需要在 0% 到 200% 之间。' }, 400);
+  if (Array.from(slogan).length > 20) return json({ error: '底部文案最多 20 个字。' }, 400);
   if (!validDoodleColor(brushColor)) return json({ error: '涂鸦颜色格式无效。' }, 400);
   if (!validDoodleStyle(brushStyle)) return json({ error: '涂鸦样式无效。' }, 400);
   const updatedAt = nowIso();
   await env.DB.batch([
-    env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, updated_at = ?5 WHERE id = ?6')
-      .bind(targetAt.toISOString(), blurPx, contrast, brightness, updatedAt, roomId),
+    env.DB.prepare('UPDATE rooms SET target_at = ?1, blur_px = ?2, contrast = ?3, brightness = ?4, slogan = ?5, updated_at = ?6 WHERE id = ?7')
+      .bind(targetAt.toISOString(), blurPx, contrast, brightness, slogan, updatedAt, roomId),
     env.DB.prepare('UPDATE users SET brush_color = ?1, brush_style = ?2 WHERE id = ?3')
       .bind(brushColor, brushStyle, user.id),
   ]);
-  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, brushColor, brushStyle, updatedAt, actorId: user.id });
+  await broadcast(env, roomId, 'settings.updated', { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, slogan, brushColor, brushStyle, updatedAt, actorId: user.id });
   return json(await roomState(env, request, roomId, user));
 }
 

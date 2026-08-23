@@ -78,8 +78,7 @@
       </section>
 
       <footer class="footer-note">
-        <span>把想念留给时间</span>
-        <span class="footer-separator">·</span>
+        <span id="slogan">把想念留给时间</span>
         <span id="timezone-label">本地时间</span>
       </footer>
     </main>
@@ -152,6 +151,11 @@
           <div class="label-row"><label for="brightness-range">背景亮度</label><output id="brightness-output" for="brightness-range">100%</output></div>
           <input id="brightness-range" type="range" min="0" max="2" value="1" step="0.01" />
           <div class="range-labels"><span>0%</span><span>200%</span></div>
+        </div>
+
+        <div class="form-field">
+          <div class="label-row"><label for="slogan-input">底部文案</label><output id="slogan-count">0/20</output></div>
+          <input id="slogan-input" type="text" maxlength="20" placeholder="把想念留给时间" autocomplete="off" />
         </div>
 
         <div class="form-field brush-settings">

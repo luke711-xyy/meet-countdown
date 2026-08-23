@@ -1,0 +1,1 @@
+ALTER TABLE rooms ADD COLUMN slogan TEXT NOT NULL DEFAULT '把想念留给时间';
