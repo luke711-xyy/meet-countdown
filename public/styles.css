@@ -81,7 +81,7 @@ button { cursor: pointer; }
 }
 .water-canvas.water-ready { opacity: 1; }
 .water-canvas.water-unavailable { display: none; }
-.doodle-canvas { z-index: 1.5; inset: 0; opacity: 0; transition: opacity 180ms ease; }
+.doodle-canvas { z-index: 1.5; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 180ms ease; }
 .water-canvas:not(.water-ready) ~ .doodle-canvas { opacity: 0.94; }
 .html-canvas-probe { position: fixed; left: -2px; top: -2px; z-index: -5; width: 1px; height: 1px; opacity: 0.001; pointer-events: none; }
 #html-canvas-probe-content { width: 1px; height: 1px; }
