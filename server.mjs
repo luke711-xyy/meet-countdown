@@ -118,7 +118,10 @@ function validateSettings(input) {
     if (typeof backgroundDataUrl !== 'string' || !/^data:image\/(jpeg|png|webp|gif);base64,[a-z0-9+/=]+$/i.test(backgroundDataUrl)) {
       throw new Error('背景图片格式不受支持，请选择 JPG、PNG、WEBP 或 GIF。');
     }
-    if (backgroundDataUrl.length > 11 * 1024 * 1024) throw new Error('背景图片请控制在 8 MB 以内。');
+    const base64 = backgroundDataUrl.slice(backgroundDataUrl.indexOf(',') + 1);
+    const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+    const decodedBytes = Math.floor((base64.length * 3) / 4) - padding;
+    if (decodedBytes > 30 * 1024 * 1024) throw new Error('背景图片请控制在 30 MB 以内。');
   }
 
   return { targetAt: targetAt.toISOString(), blurPx, contrast, brightness, backgroundDataUrl };

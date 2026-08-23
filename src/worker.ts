@@ -19,7 +19,7 @@ type AuthUser = {
 };
 
 const ROOM_PATTERN = /^room_[a-z0-9]{10}$/;
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 const MAX_DOODLE_POINTS = 800;
 const DOODLE_STYLES = new Set(['neon', 'fireworks']);
@@ -428,7 +428,7 @@ async function handleBackground(request: Request, env: Env, roomId: string, memb
   const type = safeImageType(request.headers.get('Content-Type'));
   const length = Number(request.headers.get('Content-Length') || 0);
   if (!type) return json({ error: '背景只支持 JPG、PNG、WEBP 或 GIF。' }, 400);
-  if (length > MAX_IMAGE_BYTES) return json({ error: '背景图片请控制在 8 MB 以内。' }, 413);
+  if (length > MAX_IMAGE_BYTES) return json({ error: '背景图片请控制在 30 MB 以内。' }, 413);
   const key = `rooms/${roomId}/background`;
   await env.MEDIA.put(key, request.body, { httpMetadata: { contentType: type } });
   await env.DB.prepare('UPDATE rooms SET background_key = ?1, updated_at = ?2 WHERE id = ?3').bind(key, nowIso(), roomId).run();

@@ -229,7 +229,7 @@ function closeSettings() { if (!elements.dialog.classList.contains('hidden')) vo
 
 function handleBackgroundFile(file) {
   if (!file) return;
-  if (file.size > 8 * 1024 * 1024) return showToast('图片太大了，请选择 8 MB 以内的照片');
+  if (file.size > 30 * 1024 * 1024) return showToast('图片太大了，请选择 30 MB 以内的照片');
   selectedBackgroundFile = file; backgroundSelection = 'upload';
   const reader = new FileReader();
   reader.addEventListener('load', () => { selectedBackground = reader.result; elements.fileName.textContent = file.name; elements.removeBackground.classList.remove('hidden'); setBackground(selectedBackground, Number(elements.blurRange.value)); });
