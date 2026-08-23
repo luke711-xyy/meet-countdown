@@ -42,6 +42,8 @@ let contextTarget = null;
 let lastPointerSentAt = 0;
 let lastPointer = null;
 let doodlePointer = null;
+const activeTouchPointers = new Map();
+let touchEraseGesture = null;
 let savePromise = null;
 const doodleUndoStack = [];
 const doodleRedoStack = [];
@@ -165,6 +167,14 @@ async function prepareBackgroundFile(file) {
 
 function isDoodleSurface(event) {
   return !event.target?.closest?.('button, input, textarea, select, form, .edge-rail, .settings-dialog, .auth-gate, .room-gate, .context-menu');
+}
+
+function isTouchPointer(event) {
+  return event.pointerType === 'touch' || event.pointerType === 'pen';
+}
+
+function setDoodleGestureActive(active) {
+  document.documentElement.classList.toggle('is-doodling', active);
 }
 
 function sendDoodlePreview(stroke, phase, point) {
@@ -302,17 +312,42 @@ function closeContextMenu() {
   contextTarget = null;
   elements.contextMenu.classList.add('hidden');
 }
-function openContextMenu(event, type, id) {
-  event.preventDefault(); event.stopPropagation();
+function openContextMenuAt(type, id, clientX, clientY) {
   contextTarget = { type, id };
   elements.contextDelete.textContent = type === 'voice' ? '删除录音' : '删除任务';
   elements.contextMenu.classList.remove('hidden');
   const margin = 10;
-  const left = Math.min(event.clientX, window.innerWidth - elements.contextMenu.offsetWidth - margin);
-  const top = Math.min(event.clientY, window.innerHeight - elements.contextMenu.offsetHeight - margin);
+  const left = Math.min(clientX, window.innerWidth - elements.contextMenu.offsetWidth - margin);
+  const top = Math.min(clientY, window.innerHeight - elements.contextMenu.offsetHeight - margin);
   elements.contextMenu.style.left = `${Math.max(margin, left)}px`;
   elements.contextMenu.style.top = `${Math.max(margin, top)}px`;
   requestAnimationFrame(() => elements.contextDelete.focus());
+}
+function openContextMenu(event, type, id) {
+  event.preventDefault(); event.stopPropagation();
+  openContextMenuAt(type, id, event.clientX, event.clientY);
+}
+function bindLongPressDelete(item, type, id) {
+  let timer = 0;
+  let startX = 0;
+  let startY = 0;
+  const clear = () => { if (timer) window.clearTimeout(timer); timer = 0; };
+  item.addEventListener('pointerdown', (event) => {
+    if (!isTouchPointer(event) || event.target.closest?.('button, input, textarea, select, a')) return;
+    startX = event.clientX; startY = event.clientY;
+    clear();
+    timer = window.setTimeout(() => {
+      timer = 0;
+      event.preventDefault();
+      openContextMenuAt(type, id, event.clientX, event.clientY);
+    }, 620);
+  }, { passive: false });
+  item.addEventListener('pointermove', (event) => {
+    if (timer && Math.hypot(event.clientX - startX, event.clientY - startY) > 10) clear();
+  }, { passive: true });
+  item.addEventListener('pointerup', clear, { passive: true });
+  item.addEventListener('pointercancel', clear, { passive: true });
+  item.addEventListener('pointerleave', clear, { passive: true });
 }
 async function deleteContextTarget() {
   const target = contextTarget;
@@ -455,6 +490,7 @@ function makeTaskElement(task, index) {
   const isMine = task.authorId === memberId;
   const item = document.createElement('article'); item.className = `task-capsule${isMine ? '' : ' is-readonly'}`;
   item.addEventListener('contextmenu', (event) => { if (isMine) openContextMenu(event, 'task', task.id); else event.preventDefault(); });
+  if (isMine) bindLongPressDelete(item, 'task', task.id);
   const checkbox = document.createElement('button'); checkbox.className = 'task-check'; checkbox.type = 'button'; checkbox.disabled = !isMine; checkbox.setAttribute('aria-label', isMine ? (task.completed ? '标记未完成' : '标记完成') : '对方的任务'); checkbox.setAttribute('aria-pressed', String(task.completed));
   checkbox.addEventListener('click', async () => { if (!roomId) return; try { await api(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: !task.completed }) }); } catch (error) { showToast(error.message); } });
   const text = document.createElement('span'); text.className = 'task-text'; text.textContent = task.text; if (task.completed) text.classList.add('is-completed');
@@ -485,6 +521,7 @@ function renderTasks() {
 function makeVoiceElement(note) {
   const item = document.createElement('article'); item.className = `voice-capsule ${note.authorId === memberId ? 'is-mine' : 'is-theirs'}`; item.title = `${note.authorId === memberId ? '我' : '对方'} · ${formatShortTime(note.createdAt)}`;
   item.addEventListener('contextmenu', (event) => { if (note.authorId === memberId) openContextMenu(event, 'voice', note.id); else event.preventDefault(); });
+  if (note.authorId === memberId) bindLongPressDelete(item, 'voice', note.id);
   const play = document.createElement('button'); play.className = 'voice-play'; play.type = 'button'; play.textContent = '▶'; play.setAttribute('aria-label', '播放留言');
   const wave = document.createElement('span'); wave.className = 'voice-wave'; wave.setAttribute('aria-hidden', 'true');
   for (let index = 0; index < 17; index += 1) {
@@ -671,11 +708,11 @@ document.addEventListener('keydown', (event) => {
     void redoDoodle();
   }
 });
-window.addEventListener('pointermove', (event) => {
-  const pointer = waterPoint(event); const x = pointer.x; const y = pointer.y; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
-  if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
-  if (doodlePointer?.pointerId === event.pointerId) {
-    const point = doodlePoint(event);
+function processDoodleMove(event) {
+  if (doodlePointer?.pointerId !== event.pointerId) return;
+  const moveEvents = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
+  for (const moveEvent of moveEvents) {
+    const point = doodlePoint(moveEvent);
     if (doodlePointer.mode === 'draw') {
       const added = doodle.appendDraw(point);
       if (added && performance.now() - doodlePointer.lastSentAt > DOODLE_PREVIEW_INTERVAL) { doodlePointer.lastSentAt = performance.now(); sendDoodlePreview(doodlePointer.stroke, 'point', added); }
@@ -683,41 +720,80 @@ window.addEventListener('pointermove', (event) => {
       doodle.eraseAt(point, memberId, eraseDoodle);
     }
   }
+}
+
+window.addEventListener('pointermove', (event) => {
+  if (event.pointerType === 'touch') activeTouchPointers.set(event.pointerId, event);
+  const pointer = waterPoint(event); const x = pointer.x; const y = pointer.y; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
+  if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
+  if (touchEraseGesture && activeTouchPointers.has(event.pointerId)) {
+    event.preventDefault();
+    doodle.eraseAt(doodlePoint(event), memberId, eraseDoodle);
+  } else if (doodlePointer?.pointerId === event.pointerId) {
+    event.preventDefault();
+    processDoodleMove(event);
+  }
   lastPointer = { x, y, now }; const rail = event.target?.closest?.('.edge-rail');
   setRailHover(elements.voiceRail, Boolean(rail === elements.voiceRail || event.clientX < 92));
   setRailHover(elements.taskRail, Boolean(rail === elements.taskRail || event.clientX > window.innerWidth - 92));
-}, { passive: true });
+}, { passive: false });
 window.addEventListener('pointerdown', (event) => {
+  if (event.pointerType === 'touch') activeTouchPointers.set(event.pointerId, event);
+  const surface = isDoodleSurface(event);
   const pointer = waterPoint(event); water.addRipple(pointer.x, pointer.y, 0.12);
-  if (!isDoodleSurface(event) || (event.button !== 0 && event.button !== 2)) return;
+  if (event.pointerType === 'touch' && activeTouchPointers.size >= 2 && surface) {
+    event.preventDefault();
+    touchEraseGesture = { pointerIds: new Set(activeTouchPointers.keys()) };
+    cancelActiveDoodle();
+    doodle.beginErase();
+    for (const activePointer of activeTouchPointers.values()) doodle.eraseAt(doodlePoint(activePointer), memberId, eraseDoodle);
+    return;
+  }
+  if (!surface || (event.button !== 0 && event.button !== 2)) return;
+  if (isTouchPointer(event)) event.preventDefault();
   const point = doodlePoint(event);
   if (event.button === 0) {
     const stroke = doodle.beginDraw(point);
     if (!stroke) return;
+    setDoodleGestureActive(true);
     doodlePointer = { pointerId: event.pointerId, mode: 'draw', stroke, lastSentAt: performance.now() };
     sendDoodlePreview(stroke, 'start', point);
   } else {
     doodle.beginErase();
+    setDoodleGestureActive(true);
     doodlePointer = { pointerId: event.pointerId, mode: 'erase' };
     doodle.eraseAt(point, memberId, eraseDoodle);
   }
-}, { passive: true });
+}, { passive: false });
 window.addEventListener('pointerup', (event) => {
+  if (event.pointerType === 'touch') activeTouchPointers.delete(event.pointerId);
+  if (touchEraseGesture) {
+    if (activeTouchPointers.size < 2) touchEraseGesture = null;
+    return;
+  }
   if (doodlePointer?.pointerId !== event.pointerId) return;
   if (doodlePointer.mode === 'draw') {
     const stroke = doodle.finishDraw();
     if (stroke) { sendDoodlePreview(stroke, 'point', stroke.points[stroke.points.length - 1]); void persistDoodle(stroke); }
   }
+  setDoodleGestureActive(false);
   doodlePointer = null;
 });
 window.addEventListener('pointercancel', (event) => {
+  if (event.pointerType === 'touch') activeTouchPointers.delete(event.pointerId);
+  if (touchEraseGesture) {
+    if (activeTouchPointers.size < 2) touchEraseGesture = null;
+    return;
+  }
   if (doodlePointer?.pointerId !== event.pointerId) return;
   if (doodlePointer.mode === 'draw') doodle.cancelDraw();
+  setDoodleGestureActive(false);
   doodlePointer = null;
 });
 function cancelActiveDoodle() {
   if (!doodlePointer) return;
   if (doodlePointer.mode === 'draw') doodle.cancelDraw();
+  setDoodleGestureActive(false);
   doodlePointer = null;
 }
 window.addEventListener('blur', cancelActiveDoodle);
@@ -725,6 +801,13 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) cance
 window.addEventListener('contextmenu', (event) => {
   if (isDoodleSurface(event)) event.preventDefault();
 });
+
+function syncCanvasViewport() {
+  doodle.syncViewport();
+  water.resize();
+}
+window.addEventListener('resize', syncCanvasViewport, { passive: true });
+window.visualViewport?.addEventListener('resize', syncCanvasViewport, { passive: true });
 
 await initHtmlCanvasBridge(); await water.init();
 await bootApp(); setInterval(render, 250); setInterval(syncEphemeralState, 30000);
