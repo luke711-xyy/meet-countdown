@@ -161,10 +161,7 @@
         <div class="form-field brush-settings">
           <div class="label-row"><label for="brush-color">涂鸦颜色</label><output id="brush-color-output">#8BE9FD</output></div>
           <input id="brush-color" type="color" value="#8be9fd" />
-          <div class="brush-style-options" role="group" aria-label="涂鸦样式">
-            <button class="brush-style-option is-active" id="brush-style-neon" type="button" data-brush-style="neon">霓虹灯</button>
-            <button class="brush-style-option" id="brush-style-fireworks" type="button" data-brush-style="fireworks">荧光棒烟花</button>
-          </div>
+          <p class="field-hint">霓虹灯</p>
         </div>
 
         <div class="room-settings">
@@ -176,7 +173,6 @@
 
         <div class="dialog-actions">
           <p class="save-status" id="save-status" role="status"></p>
-          <button class="primary-button" id="save-settings" value="default" type="submit">保存设置</button>
         </div>
       </form>
     </section>
@@ -185,6 +181,6 @@
     <div class="context-menu hidden" id="context-menu" role="menu">
       <button id="context-delete" type="button" role="menuitem">删除</button>
     </div>
-    <script type="module" src="/app.js?v=7"></script>
+    <script type="module" src="/app.js?v=8"></script>
   </body>
 </html>

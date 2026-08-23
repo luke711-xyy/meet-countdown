@@ -49,6 +49,8 @@ export class DoodleCanvas {
     this.revision = 0;
     this.resize = this.resize.bind(this);
     this.render = this.render.bind(this);
+    this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.resizeObserver.observe(this.canvas);
     window.addEventListener('resize', this.resize, { passive: true });
     this.resize();
     this.requestRender();
@@ -62,13 +64,12 @@ export class DoodleCanvas {
 
   resize() {
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
-    const width = Math.max(1, window.innerWidth);
-    const height = Math.max(1, window.innerHeight);
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width || document.documentElement.clientWidth || window.innerWidth));
+    const height = Math.max(1, Math.round(rect.height || document.documentElement.clientHeight || window.innerHeight));
     if (this.canvas.width !== Math.round(width * ratio) || this.canvas.height !== Math.round(height * ratio)) {
       this.canvas.width = Math.round(width * ratio);
       this.canvas.height = Math.round(height * ratio);
-      this.canvas.style.width = `${width}px`;
-      this.canvas.style.height = `${height}px`;
     }
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
     this.staticCanvas.width = this.canvas.width;

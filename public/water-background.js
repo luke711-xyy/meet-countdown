@@ -146,7 +146,7 @@ export class WaterBackground {
       const quad = new THREE.PlaneGeometry(2, 2);
       this.simulation = this.createSimulation(quad);
       this.background = this.createBackground(quad);
-      this.resizeObserver.observe(document.documentElement);
+      this.resizeObserver.observe(this.canvas);
       window.addEventListener('resize', () => this.resize(), { passive: true });
       this.resize();
       this.render(0);
@@ -266,12 +266,15 @@ export class WaterBackground {
 
   resize() {
     if (!this.renderer) return;
-    this.renderer.setSize(window.innerWidth, window.innerHeight, false);
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width || document.documentElement.clientWidth || window.innerWidth));
+    const height = Math.max(1, Math.round(rect.height || document.documentElement.clientHeight || window.innerHeight));
+    this.renderer.setSize(width, height, false);
     this.doodleResizePending = true;
     this.doodleDirty = true;
     if (this.background) {
-      this.background.material.uniforms.uViewportAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
-      this.background.material.uniforms.uViewportSize.value.set(window.innerWidth, window.innerHeight);
+      this.background.material.uniforms.uViewportAspect.value = width / height;
+      this.background.material.uniforms.uViewportSize.value.set(width, height);
     }
   }
 

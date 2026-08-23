@@ -1,6 +1,6 @@
-import { WaterBackground } from './water-background.js?v=4';
+import { WaterBackground } from './water-background.js?v=5';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
-import { DoodleCanvas } from './doodle-canvas.js?v=3';
+import { DoodleCanvas } from './doodle-canvas.js?v=4';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -9,7 +9,7 @@ const elements = {
   days: $('#days'), hours: $('#hours'), minutes: $('#minutes'), seconds: $('#seconds'), currentTime: $('#current-time'), slogan: $('#slogan'),
   timezoneLabel: $('#timezone-label'), dialog: $('#settings-dialog'), form: $('#settings-form'), targetAt: $('#target-at'),
   chooseBackground: $('#choose-background'), fileName: $('#file-name'), removeBackground: $('#remove-background'),
-  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), sloganInput: $('#slogan-input'), sloganCount: $('#slogan-count'), brushColor: $('#brush-color'), brushColorOutput: $('#brush-color-output'), brushStyleNeon: $('#brush-style-neon'), brushStyleFireworks: $('#brush-style-fireworks'), saveButton: $('#save-settings'), saveStatus: $('#save-status'),
+  blurRange: $('#blur-range'), blurOutput: $('#blur-output'), contrastRange: $('#contrast-range'), contrastOutput: $('#contrast-output'), brightnessRange: $('#brightness-range'), brightnessOutput: $('#brightness-output'), sloganInput: $('#slogan-input'), sloganCount: $('#slogan-count'), brushColor: $('#brush-color'), brushColorOutput: $('#brush-color-output'), saveStatus: $('#save-status'),
   toast: $('#toast'), voiceRail: $('#voice-rail'), voiceOrb: $('#voice-orb'), voiceCount: $('#voice-count'),
   voiceCapsules: $('#voice-capsules'), voiceRecordingCapsule: $('#voice-recording-capsule'), cancelVoice: $('#cancel-voice'), stopVoice: $('#stop-voice'), recordTime: $('#record-time'),
   taskRail: $('#task-rail'), taskOrb: $('#task-orb'), taskCount: $('#task-count'), taskComposer: $('#task-form'), cancelTask: $('#cancel-task'), taskInput: $('#task-input'), taskListTheirs: $('#task-list-theirs'), taskListMine: $('#task-list-mine'),
@@ -37,8 +37,8 @@ let activeVoicePlay = null;
 let contextTarget = null;
 let lastPointerSentAt = 0;
 let lastPointer = null;
-let selectedBrushStyle = 'neon';
 let doodlePointer = null;
+let savePromise = null;
 const DOODLE_PREVIEW_INTERVAL = 40;
 const DEFAULT_BACKGROUND = '/default-background.png';
 const doodle = new DoodleCanvas(elements.doodleCanvas);
@@ -65,18 +65,29 @@ function updateToneLabels() {
   elements.brightnessOutput.textContent = `${Math.round(Number(elements.brightnessRange.value) * 100)}%`;
 }
 
-function setBrushSettings(color = '#8be9fd', style = 'neon') {
+function setBrushSettings(color = '#8be9fd') {
   const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : '#8be9fd';
-  selectedBrushStyle = style === 'fireworks' ? 'fireworks' : 'neon';
   elements.brushColor.value = safeColor;
   elements.brushColorOutput.textContent = safeColor.toUpperCase();
-  elements.brushStyleNeon.classList.toggle('is-active', selectedBrushStyle === 'neon');
-  elements.brushStyleFireworks.classList.toggle('is-active', selectedBrushStyle === 'fireworks');
-  doodle.configure({ color: safeColor, style: selectedBrushStyle, authorId: memberId || '' });
+  doodle.configure({ color: safeColor, style: 'neon', authorId: memberId || '' });
+}
+
+function surfacePoint(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width || window.innerWidth;
+  const height = rect.height || window.innerHeight;
+  return {
+    x: Math.max(0, Math.min(1, (event.clientX - rect.left) / width)),
+    y: Math.max(0, Math.min(1, (event.clientY - rect.top) / height)),
+  };
 }
 
 function doodlePoint(event) {
-  return { x: Math.max(0, Math.min(1, event.clientX / window.innerWidth)), y: Math.max(0, Math.min(1, event.clientY / window.innerHeight)) };
+  return surfacePoint(event, elements.doodleCanvas);
+}
+
+function waterPoint(event) {
+  return surfacePoint(event, elements.waterCanvas);
 }
 
 function isDoodleSurface(event) {
@@ -199,7 +210,7 @@ async function api(path, options = {}) {
 async function loadState() {
   try {
     state = await api('/api/state'); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
-    setBrushSettings(state.brushColor, state.brushStyle); doodle.hydrate(state.doodles || [], memberId); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
+    setBrushSettings(state.brushColor); doodle.hydrate(state.doodles || [], memberId); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
   } catch (error) { elements.targetSummary.textContent = '请确认后端服务正在运行'; console.error(error); }
 }
 
@@ -208,12 +219,13 @@ function openSettings() {
   elements.saveStatus.textContent = '';
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; updateToneLabels();
   elements.sloganInput.value = state.slogan ?? '把想念留给时间'; elements.sloganCount.textContent = `${elements.sloganInput.value.length}/20`;
-  setBrushSettings(state.brushColor, state.brushStyle);
+  setBrushSettings(state.brushColor);
   selectedBackground = customBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
   elements.fileName.textContent = selectedBackground ? '已选择照片' : '默认背景'; elements.removeBackground.classList.toggle('hidden', !selectedBackground); elements.inviteUrl.value = state.inviteUrl || `${location.origin}/?room=${encodeURIComponent(roomId || '')}`; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
   elements.dialog.classList.remove('hidden'); elements.dialog.setAttribute('aria-hidden', 'false');
 }
-function closeSettings() { elements.dialog.classList.add('hidden'); elements.dialog.setAttribute('aria-hidden', 'true'); }
+function hideSettings() { elements.dialog.classList.add('hidden'); elements.dialog.setAttribute('aria-hidden', 'true'); }
+function closeSettings() { if (!elements.dialog.classList.contains('hidden')) void saveSettings(); }
 
 function handleBackgroundFile(file) {
   if (!file) return;
@@ -225,18 +237,27 @@ function handleBackgroundFile(file) {
 }
 
 async function saveSettings(event) {
-  event.preventDefault(); elements.saveButton.disabled = true; elements.saveStatus.textContent = '正在保存…';
-  try {
-    const targetAt = new Date(elements.targetAt.value).toISOString();
-    if (roomId) {
-      if (backgroundSelection === 'upload' && selectedBackgroundFile) await api('/api/background', { method: 'PUT', headers: { 'Content-Type': selectedBackgroundFile.type }, body: selectedBackgroundFile });
-      else if (backgroundSelection === 'remove') await api('/api/background', { method: 'DELETE' });
-      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
-    } else {
-      state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
+  event?.preventDefault();
+  if (savePromise) return savePromise;
+  elements.saveStatus.textContent = '正在保存…';
+  savePromise = (async () => {
+    try {
+      const targetAt = new Date(elements.targetAt.value).toISOString();
+      if (roomId) {
+        if (backgroundSelection === 'upload' && selectedBackgroundFile) await api('/api/background', { method: 'PUT', headers: { 'Content-Type': selectedBackgroundFile.type }, body: selectedBackgroundFile });
+        else if (backgroundSelection === 'remove') await api('/api/background', { method: 'DELETE' });
+        state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: 'neon' }) });
+      } else {
+        state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), slogan: elements.sloganInput.value.trim(), brushColor: elements.brushColor.value, brushStyle: 'neon' }) });
+      }
+      elements.saveStatus.textContent = ''; setBrushSettings(state.brushColor); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; hideSettings(); showToast('设置已保存'); render();
+    } catch (error) {
+      elements.saveStatus.textContent = error.message;
+    } finally {
+      savePromise = null;
     }
-    elements.saveStatus.textContent = ''; setBrushSettings(state.brushColor, state.brushStyle); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
-  } catch (error) { elements.saveStatus.textContent = error.message; } finally { elements.saveButton.disabled = false; }
+  })();
+  return savePromise;
 }
 
 function makeTaskElement(task, index) {
@@ -298,7 +319,7 @@ function updateTaskFromEvent(task) { const item = state.tasks.find((candidate) =
 function applyRealtimeEvent(event) {
   const payload = event.payload || {};
   if (event.type === 'pointer') window.setTimeout(() => water.addRipple(payload.x, payload.y, Number(payload.strength || 0.04) * 0.72), 110);
-  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 1; state.slogan = payload.slogan ?? state.slogan ?? '把想念留给时间'; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = payload.brushStyle || state.brushStyle; setBrushSettings(state.brushColor, state.brushStyle); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
+  else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 1; state.slogan = payload.slogan ?? state.slogan ?? '把想念留给时间'; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = 'neon'; setBrushSettings(state.brushColor); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
   else if (event.type === 'background.updated') { state.backgroundUrl = payload.backgroundUrl; state.backgroundDataUrl = null; setBackground(currentBackground(), state.blurPx); }
   else if (event.type === 'task.created') { state.tasks = [...(state.tasks || []).filter((task) => task.id !== payload.id), payload]; renderTasks(); }
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);
@@ -402,7 +423,7 @@ async function destroyCurrentRoom() {
   if (!roomId || !window.confirm('退出后，这个房间和其中的任务、录音会立即销毁，另一方也会被通知。继续吗？')) return;
   elements.destroyRoom.disabled = true;
   try {
-    await api('/api/room', { method: 'DELETE' }); socket?.close(); socket = null; roomId = null; state = null; history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); closeSettings();
+    await api('/api/room', { method: 'DELETE' }); socket?.close(); socket = null; roomId = null; state = null; history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); hideSettings();
   } catch (error) { showToast(error.message); } finally { elements.destroyRoom.disabled = false; }
 }
 
@@ -415,8 +436,6 @@ elements.contrastRange.addEventListener('input', () => { updateToneLabels(); wat
 elements.brightnessRange.addEventListener('input', () => { updateToneLabels(); water.setTone(Number(elements.contrastRange.value), Number(elements.brightnessRange.value)); });
 elements.sloganInput.addEventListener('input', () => { elements.sloganCount.textContent = `${elements.sloganInput.value.length}/20`; });
 elements.brushColor.addEventListener('input', () => { elements.brushColorOutput.textContent = elements.brushColor.value.toUpperCase(); doodle.configure({ color: elements.brushColor.value }); });
-elements.brushStyleNeon.addEventListener('click', () => setBrushSettings(elements.brushColor.value, 'neon'));
-elements.brushStyleFireworks.addEventListener('click', () => setBrushSettings(elements.brushColor.value, 'fireworks'));
 elements.chooseBackground.addEventListener('click', () => { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp,image/gif'; input.addEventListener('change', () => handleBackgroundFile(input.files?.[0])); input.click(); });
 elements.removeBackground.addEventListener('click', () => { selectedBackground = null; selectedBackgroundFile = null; backgroundSelection = 'remove'; elements.fileName.textContent = '默认背景'; elements.removeBackground.classList.add('hidden'); setBackground(DEFAULT_BACKGROUND, Number(elements.blurRange.value)); });
 elements.form.addEventListener('submit', saveSettings); $('#open-settings').addEventListener('click', openSettings); $('#close-settings').addEventListener('click', closeSettings);
@@ -431,7 +450,7 @@ elements.taskComposer.addEventListener('submit', async (event) => { event.preven
 document.addEventListener('pointerdown', (event) => { if (!event.target.closest?.('#context-menu')) closeContextMenu(); });
 document.addEventListener('keydown', (event) => { if (event.key !== 'Escape') return; if (!elements.dialog.classList.contains('hidden')) closeSettings(); else if (!elements.contextMenu.classList.contains('hidden')) closeContextMenu(); else if (elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer(); else if (recorder?.state === 'recording') cancelRecording(); });
 window.addEventListener('pointermove', (event) => {
-  const x = event.clientX / window.innerWidth; const y = event.clientY / window.innerHeight; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
+  const pointer = waterPoint(event); const x = pointer.x; const y = pointer.y; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
   if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
   if (doodlePointer?.pointerId === event.pointerId) {
     const point = doodlePoint(event);
@@ -447,7 +466,7 @@ window.addEventListener('pointermove', (event) => {
   setRailHover(elements.taskRail, Boolean(rail === elements.taskRail || event.clientX > window.innerWidth - 92));
 }, { passive: true });
 window.addEventListener('pointerdown', (event) => {
-  water.addRipple(event.clientX / window.innerWidth, event.clientY / window.innerHeight, 0.12);
+  const pointer = waterPoint(event); water.addRipple(pointer.x, pointer.y, 0.12);
   if (!isDoodleSurface(event) || (event.button !== 0 && event.button !== 2)) return;
   const point = doodlePoint(event);
   if (event.button === 0) {

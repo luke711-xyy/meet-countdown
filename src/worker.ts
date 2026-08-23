@@ -285,7 +285,7 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     brightness: room.brightness,
     slogan: room.slogan ?? '把想念留给时间',
     brushColor: brushSettings?.brushColor || '#8be9fd',
-    brushStyle: validDoodleStyle(brushSettings?.brushStyle) ? brushSettings.brushStyle : 'neon',
+    brushStyle: 'neon',
     backgroundUrl: room.backgroundKey ? `/api/background?room=${encodeURIComponent(roomId)}&v=${encodeURIComponent(room.updatedAt)}` : null,
     updatedAt: room.updatedAt,
     timeZone: 'Asia/Singapore',
@@ -381,7 +381,7 @@ async function handleSettings(request: Request, env: Env, roomId: string, user: 
   const currentBrush = await env.DB.prepare('SELECT brush_color AS brushColor, brush_style AS brushStyle FROM users WHERE id = ?1')
     .bind(user.id).first<{ brushColor: string; brushStyle: string }>();
   const brushColor = input.brushColor === undefined ? (currentBrush?.brushColor || '#8be9fd') : String(input.brushColor);
-  const brushStyle = input.brushStyle === undefined ? (currentBrush?.brushStyle || 'neon') : String(input.brushStyle);
+  const brushStyle = 'neon';
   if (Number.isNaN(targetAt.getTime())) return json({ error: '请输入有效的见面时间。' }, 400);
   if (!Number.isInteger(blurPx) || blurPx < 0 || blurPx > 24) return json({ error: '背景模糊度需要在 0 到 24 之间。' }, 400);
   if (!Number.isFinite(contrast) || contrast < 0 || contrast > 2) return json({ error: '背景对比度需要在 0% 到 200% 之间。' }, 400);
