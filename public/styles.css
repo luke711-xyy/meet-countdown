@@ -153,7 +153,7 @@ button { cursor: pointer; }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 30px; }
 .section-kicker { margin: 0 0 8px; color: var(--accent); font-size: 10px; letter-spacing: 0.14em; }
 .dialog-heading h2 { max-width: 340px; margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.04em; line-height: 1.1; text-wrap: balance; }
-.close-button { width: 31px; height: 31px; border-radius: 50%; font-size: 24px; font-weight: 300; line-height: 1; }
+.close-button { width: 31px; height: 31px; padding-bottom: 2px; border-radius: 50%; font-size: 24px; font-weight: 300; line-height: 1; }
 .form-field { margin-top: 24px; }
 .form-field label, .label-row { color: var(--ink-soft); font-size: 13px; }
 .label-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
