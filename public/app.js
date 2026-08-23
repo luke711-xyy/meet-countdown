@@ -204,6 +204,7 @@ async function loadState() {
 
 function openSettings() {
   if (!state) return;
+  elements.saveStatus.textContent = '';
   elements.targetAt.value = toInputValue(state.targetAt); elements.blurRange.value = state.blurPx || 0; elements.blurOutput.textContent = `${state.blurPx || 0} px`; elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 0; updateToneLabels();
   setBrushSettings(state.brushColor, state.brushStyle);
   selectedBackground = customBackground(); selectedBackgroundFile = null; backgroundSelection = 'unchanged';
@@ -232,7 +233,7 @@ async function saveSettings(event) {
     } else {
       state = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetAt, backgroundDataUrl: backgroundSelection === 'remove' ? null : selectedBackground, blurPx: Number(elements.blurRange.value), contrast: Number(elements.contrastRange.value), brightness: Number(elements.brightnessRange.value), brushColor: elements.brushColor.value, brushStyle: selectedBrushStyle }) });
     }
-    setBrushSettings(state.brushColor, state.brushStyle); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
+    elements.saveStatus.textContent = ''; setBrushSettings(state.brushColor, state.brushStyle); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 0); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; closeSettings(); showToast('设置已保存'); render();
   } catch (error) { elements.saveStatus.textContent = error.message; } finally { elements.saveButton.disabled = false; }
 }
 
