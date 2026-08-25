@@ -71,6 +71,21 @@ async function roomRetention(env: Env, roomId: string) {
     .bind(roomId).first<{ taskRetentionDays: number; voiceRetentionDays: number }>();
 }
 
+async function unreadVoiceCount(env: Env, roomId: string, userId: string) {
+  const result = await env.DB.prepare(`
+    SELECT COUNT(*) AS count
+    FROM voice_notes
+    WHERE room_id = ?1
+      AND author_id <> ?2
+      AND NOT EXISTS (
+        SELECT 1 FROM voice_note_reads
+        WHERE voice_note_reads.voice_id = voice_notes.id
+          AND voice_note_reads.user_id = ?2
+      )
+  `).bind(roomId, userId).first<{ count: number | string }>();
+  return Number(result?.count || 0);
+}
+
 async function cleanupRoomAndBroadcast(env: Env, roomId: string) {
   const retention = await roomRetention(env, roomId);
   if (!retention) return { taskIds: [], voiceIds: [], voiceObjects: [] };
@@ -349,6 +364,7 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     FROM room_members JOIN users ON users.id = room_members.user_id
     WHERE room_members.room_id = ?1 ORDER BY room_members.slot ASC
   `).bind(roomId).all();
+  const unreadVoiceNotes = await unreadVoiceCount(env, roomId, user.id);
 
   return {
     roomId,
@@ -369,6 +385,7 @@ async function roomState(env: Env, request: Request, roomId: string, user: AuthU
     username: user.username,
     inviteUrl: `${new URL(request.url).origin}/?room=${encodeURIComponent(roomId)}`,
     members: membersResult.results || [],
+    unreadVoiceCount: unreadVoiceNotes,
     tasks: (tasksResult.results || []).map((task) => ({
       ...task,
       completed: Boolean(task.completed),
@@ -616,6 +633,21 @@ async function handleVoiceUpload(request: Request, env: Env, roomId: string, mem
   return json(note, 201);
 }
 
+async function handleVoiceRead(env: Env, roomId: string, voiceId: string, memberId: string) {
+  const note = await env.DB.prepare('SELECT id FROM voice_notes WHERE id = ?1 AND room_id = ?2')
+    .bind(voiceId, roomId).first<{ id: string }>();
+  if (!note) return json({ error: '录音不存在。' }, 404);
+  const playedAt = nowIso();
+  await env.DB.prepare(`
+    INSERT INTO voice_note_reads (voice_id, user_id, played_at)
+    VALUES (?1, ?2, ?3)
+    ON CONFLICT(voice_id, user_id) DO UPDATE SET played_at = excluded.played_at
+  `).bind(voiceId, memberId, playedAt).run();
+  const unreadCount = await unreadVoiceCount(env, roomId, memberId);
+  await broadcast(env, roomId, 'voice.read', { id: voiceId, userId: memberId, unreadVoiceCount: unreadCount });
+  return json({ ok: true, unreadVoiceCount: unreadCount });
+}
+
 async function handleVoice(request: Request, env: Env, roomId: string, voiceId: string, memberId: string) {
   const note = await env.DB.prepare('SELECT object_key AS objectKey, mime_type AS mimeType, author_id AS authorId FROM voice_notes WHERE id = ?1 AND room_id = ?2')
     .bind(voiceId, roomId).first<{ objectKey: string; mimeType: string; authorId: string }>();
@@ -679,6 +711,7 @@ export default {
       if (url.pathname === '/api/doodles' && request.method === 'POST') return handleDoodles(request, env, roomId, '', user.id);
       if (url.pathname.startsWith('/api/doodles/') && request.method === 'DELETE') return handleDoodles(request, env, roomId, url.pathname.split('/').at(-1) || '', user.id);
       if (url.pathname === '/api/voice' && request.method === 'POST') return handleVoiceUpload(request, env, roomId, user.id);
+      if (url.pathname.startsWith('/api/voice/') && url.pathname.endsWith('/read') && request.method === 'POST') return handleVoiceRead(env, roomId, url.pathname.split('/').at(-2) || '', user.id);
       if (url.pathname.startsWith('/api/voice/') && (request.method === 'GET' || request.method === 'DELETE')) return handleVoice(request, env, roomId, url.pathname.split('/').at(-1) || '', user.id);
       if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) return handleTasks(request, env, roomId, user.id);
       return env.ASSETS.fetch(request);

@@ -548,14 +548,28 @@ function makeVoiceElement(note) {
     try {
       if (!audio.paused) { audio.pause(); audio.currentTime = 0; reset(); return; }
       if (activeAudio && activeAudio !== audio) { activeAudio.pause(); activeAudio.currentTime = 0; activeVoiceItem?.classList.remove('is-playing'); if (activeVoicePlay) activeVoicePlay.textContent = '▶'; }
-      await audio.play(); activeAudio = audio; activeVoiceItem = item; activeVoicePlay = play; item.classList.add('is-playing'); play.textContent = 'Ⅱ';
+      await audio.play(); activeAudio = audio; activeVoiceItem = item; activeVoicePlay = play; item.classList.add('is-playing'); play.textContent = 'Ⅱ'; void markVoiceAsPlayed(note.id);
     } catch { showToast('无法播放这条留言'); }
   });
   audio.addEventListener('ended', reset); audio.addEventListener('pause', () => { if (activeAudio === audio && audio.currentTime >= audio.duration) reset(); });
   item.append(play, wave, time, audio); return item;
 }
+function setVoiceUnreadCount(value) {
+  if (!state) return;
+  const count = Math.max(0, Math.floor(Number(value) || 0));
+  state.unreadVoiceCount = count;
+  elements.voiceCount.textContent = count ? String(count) : '';
+}
+async function markVoiceAsPlayed(voiceId) {
+  try {
+    const result = await api(`/api/voice/${encodeURIComponent(voiceId)}/read`, { method: 'POST' });
+    setVoiceUnreadCount(result.unreadVoiceCount);
+  } catch {
+    // A playback interaction should remain usable if the read receipt is temporarily unavailable.
+  }
+}
 function stopActiveVoice() { if (!activeAudio) return; activeAudio.pause(); activeAudio.currentTime = 0; activeVoiceItem?.classList.remove('is-playing'); if (activeVoicePlay) activeVoicePlay.textContent = '▶'; activeAudio = null; activeVoiceItem = null; activeVoicePlay = null; }
-function renderVoiceNotes() { stopActiveVoice(); const notes = [...(state?.voiceNotes || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id))); elements.voiceCapsules.replaceChildren(...notes.map(makeVoiceElement)); elements.voiceCount.textContent = notes.length ? String(notes.length) : ''; }
+function renderVoiceNotes() { stopActiveVoice(); const notes = [...(state?.voiceNotes || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id))); elements.voiceCapsules.replaceChildren(...notes.map(makeVoiceElement)); setVoiceUnreadCount(state?.unreadVoiceCount); }
 
 async function syncEphemeralState() {
   if (!roomId || !state) return;
@@ -563,9 +577,11 @@ async function syncEphemeralState() {
     const latest = await api('/api/state');
     const tasksChanged = JSON.stringify(latest.tasks || []) !== JSON.stringify(state?.tasks || []);
     const voicesChanged = JSON.stringify(latest.voiceNotes || []) !== JSON.stringify(state?.voiceNotes || []);
+    const unreadVoiceChanged = Number(latest.unreadVoiceCount || 0) !== Number(state?.unreadVoiceCount || 0);
     const doodlesChanged = JSON.stringify(latest.doodles || []) !== JSON.stringify(state?.doodles || []);
     if (tasksChanged) { state.tasks = latest.tasks || []; renderTasks(); }
-    if (voicesChanged) { state.voiceNotes = latest.voiceNotes || []; renderVoiceNotes(); }
+    if (voicesChanged) { state.voiceNotes = latest.voiceNotes || []; state.unreadVoiceCount = latest.unreadVoiceCount || 0; renderVoiceNotes(); }
+    else if (unreadVoiceChanged) setVoiceUnreadCount(latest.unreadVoiceCount);
     if (doodlesChanged) { state.doodles = latest.doodles || []; doodle.hydrate(state.doodles, memberId); }
   } catch {
     // Realtime remains the primary path; the periodic readback only heals stale tabs.
@@ -581,8 +597,9 @@ function applyRealtimeEvent(event) {
   else if (event.type === 'task.created') { state.tasks = [...(state.tasks || []).filter((task) => task.id !== payload.id), payload]; renderTasks(); }
   else if (event.type === 'task.updated') updateTaskFromEvent(payload);
   else if (event.type === 'task.deleted') { state.tasks = state.tasks.filter((task) => task.id !== payload.id); renderTasks(); }
-  else if (event.type === 'voice.created') { state.voiceNotes = [...(state.voiceNotes || []).filter((note) => note.id !== payload.id), payload]; renderVoiceNotes(); }
-  else if (event.type === 'voice.deleted') { state.voiceNotes = (state.voiceNotes || []).filter((note) => note.id !== payload.id); renderVoiceNotes(); }
+  else if (event.type === 'voice.created') { const alreadyPresent = (state.voiceNotes || []).some((note) => note.id === payload.id); state.voiceNotes = [...(state.voiceNotes || []).filter((note) => note.id !== payload.id), payload]; if (!alreadyPresent && payload.authorId !== memberId) setVoiceUnreadCount(Number(state.unreadVoiceCount || 0) + 1); renderVoiceNotes(); }
+  else if (event.type === 'voice.read') { if (payload.userId === memberId) setVoiceUnreadCount(payload.unreadVoiceCount); }
+  else if (event.type === 'voice.deleted') { state.voiceNotes = (state.voiceNotes || []).filter((note) => note.id !== payload.id); renderVoiceNotes(); void syncEphemeralState(); }
   else if (event.type === 'doodle.preview') doodle.applyPreview(payload);
   else if (event.type === 'doodle.created') { state.doodles = [...(state.doodles || []).filter((stroke) => stroke.id !== payload.id), payload]; doodle.add(payload); }
   else if (event.type === 'doodle.deleted') { state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== payload.id); doodle.remove(payload.id); }
@@ -593,7 +610,7 @@ function applyRealtimeEvent(event) {
     const voiceIds = Array.isArray(payload.voiceIds) ? new Set(payload.voiceIds) : null;
     state.tasks = taskIds ? (state.tasks || []).filter((task) => !taskIds.has(task.id)) : [];
     state.voiceNotes = voiceIds ? (state.voiceNotes || []).filter((note) => !voiceIds.has(note.id)) : [];
-    renderTasks(); renderVoiceNotes();
+    renderTasks(); renderVoiceNotes(); void syncEphemeralState();
   }
 }
 
