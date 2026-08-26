@@ -676,6 +676,10 @@ function setRailHover(rail, hovered) {
   if (rail === elements.voiceRail && recorder?.state === 'recording') cancelRecording();
   if (rail === elements.taskRail && elements.taskRail.classList.contains('is-composer-active')) cancelTaskComposer();
 }
+function isRailHoverTarget(event, rail) {
+  const target = event.target?.closest?.('.edge-orb, .edge-capsules, .task-board, .voice-recording-capsule, .task-composer-capsule, .edge-hover-bridge');
+  return Boolean(target?.closest?.(`#${rail.id}`));
+}
 
 async function bootApp() {
   const user = await refreshAuth();
@@ -772,9 +776,9 @@ window.addEventListener('pointermove', (event) => {
     event.preventDefault();
     processDoodleMove(event);
   }
-  lastPointer = { x, y, now }; const rail = event.target?.closest?.('.edge-rail');
-  setRailHover(elements.voiceRail, Boolean(rail === elements.voiceRail || event.clientX < 92));
-  setRailHover(elements.taskRail, Boolean(rail === elements.taskRail || event.clientX > window.innerWidth - 92));
+  lastPointer = { x, y, now };
+  setRailHover(elements.voiceRail, isRailHoverTarget(event, elements.voiceRail));
+  setRailHover(elements.taskRail, isRailHoverTarget(event, elements.taskRail));
 }, { passive: false });
 window.addEventListener('pointerdown', (event) => {
   if (event.pointerType === 'touch') activeTouchPointers.set(event.pointerId, event);
