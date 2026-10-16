@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseScreeningMessage, transitionScreening } from '../src/screening-protocol.ts';
+import * as screeningProtocol from '../src/screening-protocol.ts';
+
+const { parseScreeningMessage, transitionScreening } = screeningProtocol;
 
 const sockets = () => [
   { socketId: 'a1', memberId: 'alice' },
@@ -29,6 +31,31 @@ test('rejects malformed and oversized messages', () => {
   assert.equal(parseScreeningMessage(JSON.stringify({ type: 'screening.leave', payload: { sessionId: 's', seq: 0 } })), null);
   assert.equal(parseScreeningMessage(JSON.stringify({ type: 'screening.danmaku', payload: { sessionId: 's', seq: 1, text: 'x'.repeat(81) } })), null);
   assert.equal(parseScreeningMessage(JSON.stringify({ type: 'screening.signal', payload: { sessionId: 's', seq: 1, kind: 'ice', negotiationId: 'n', targetDeviceId: 'd', data: 5 } })), null);
+});
+
+test('gates oversized screening before room JSON parse while preserving pointer and doodle', () => {
+  const gate = screeningProtocol.shouldRejectOversizedRealtimeMessage;
+  const padding = 'x'.repeat(65_537);
+  assert.equal(gate(JSON.stringify({ type: 'screening.join', payload: { deviceId: 'd' }, padding })), true);
+  assert.equal(gate(JSON.stringify({ padding, payload: { type: 'pointer' }, type: 'screening.join' })), true);
+  assert.equal(gate(`{"type":"pointer","padding":"${padding}","type":"screening.join"}`), true);
+  assert.equal(gate(JSON.stringify({ type: 'pointer', payload: { x: 0.5, y: 0.5, strength: 1, padding } })), false);
+  assert.equal(gate(JSON.stringify({ padding, type: 'doodle.preview', payload: { id: 'doodle_12345678' } })), false);
+  assert.equal(gate(JSON.stringify({ type: 'screening.danmaku', payload: { text: 'é'.repeat(33_000) } })), true);
+  assert.equal(gate(JSON.stringify({ type: 'screening.join', payload: { deviceId: 'd' } })), false);
+});
+
+test('does not JSON.parse an oversized screening packet in the pre-parse gate', () => {
+  const raw = JSON.stringify({ payload: { padding: 'x'.repeat(65_537) }, type: 'screening.join' });
+  const originalParse = JSON.parse;
+  let parseCalls = 0;
+  try {
+    JSON.parse = (...args) => { parseCalls++; return originalParse(...args); };
+    assert.equal(screeningProtocol.shouldRejectOversizedRealtimeMessage(raw), true);
+  } finally {
+    JSON.parse = originalParse;
+  }
+  assert.equal(parseCalls, 0);
 });
 
 test('enforces two-member device and sharer ownership', () => {
@@ -64,6 +91,11 @@ test('rejects stale sequence and negotiation', () => {
   const reusedNegotiation = command(peers, 'a1', 'screening.signal', 3, { kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' } });
   assert.deepEqual(reusedNegotiation.events, []);
   peers = command(reusedNegotiation.peers, 'a1', 'screening.signal', 4, { kind: 'offer', negotiationId: 'n2', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' } }).peers;
+  peers = JSON.parse(JSON.stringify(peers)); // mimic serialized attachments after DO hibernation
+  const olderNegotiation = command(peers, 'a1', 'screening.signal', 5, { kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' } });
+  assert.deepEqual(olderNegotiation.events, []);
+  assert.equal(peer(olderNegotiation.peers, 'a1').negotiationId, 'n2');
+  peers = olderNegotiation.peers;
   const staleIce = command(peers, 'b1', 'screening.signal', 1, { kind: 'ice', negotiationId: 'n1', targetDeviceId: 'alice-phone', data: { candidate: 'old' } });
   assert.deepEqual(staleIce.events, []);
   const wrongTarget = command(staleIce.peers, 'b1', 'screening.signal', 2, { kind: 'answer', negotiationId: 'n2', targetDeviceId: 'alice-other', data: { type: 'answer', sdp: 'v=0' } });

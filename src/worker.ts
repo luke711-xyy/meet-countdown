@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { parseScreeningMessage, transitionScreening, type ScreeningPeer, type ScreeningTransition } from './screening-protocol.ts';
+import { parseScreeningMessage, shouldRejectOversizedRealtimeMessage, transitionScreening, type ScreeningPeer, type ScreeningTransition } from './screening-protocol.ts';
 
 export interface Env {
   ASSETS: Fetcher;
@@ -804,6 +804,7 @@ export class CoupleRoom extends DurableObject<Env> {
 
   webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
     if (typeof message !== 'string') return;
+    if (shouldRejectOversizedRealtimeMessage(message)) return;
     try {
       const input = JSON.parse(message) as { type?: string; payload?: Record<string, unknown> };
       if (typeof input?.type === 'string' && input.type.startsWith('screening.')) {

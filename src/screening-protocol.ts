@@ -10,6 +10,7 @@ export type ScreeningPeer = {
   pendingPause?: boolean;
   lastDanmakuAt?: number;
   negotiationId?: string;
+  usedNegotiationIds?: string[];
   micEnabled?: boolean;
 };
 
@@ -37,11 +38,106 @@ export type ScreeningTransition = {
 };
 
 const MAX_MESSAGE_BYTES = 65_536;
+const MAX_USED_NEGOTIATIONS = 64;
 const MAX_DANMAKU_CHARS = 80;
 const DANMAKU_INTERVAL_MS = 1_000;
 const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 128;
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
+
+// Read only top-level property names/values; never parse an oversized packet as a whole.
+function topLevelMessageType(raw: string): string | null {
+  let index = 0;
+  const whitespace = () => { while (/\s/.test(raw[index] ?? '')) index++; };
+  const readString = (): string | null => {
+    if (raw[index] !== '"') return null;
+    index++;
+    let value = '';
+    let tooLong = false;
+    while (index < raw.length) {
+      const char = raw[index++];
+      if (char === '"') return tooLong ? '' : value;
+      let decoded = char;
+      if (char === '\\') {
+        const escape = raw[index++];
+        if (escape === 'u') {
+          const hex = raw.slice(index, index + 4);
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
+          decoded = String.fromCharCode(Number.parseInt(hex, 16));
+          index += 4;
+        } else {
+          const escapes: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+          if (escape === undefined || !Object.hasOwn(escapes, escape)) return null;
+          decoded = escapes[escape];
+        }
+      } else if (char.charCodeAt(0) < 32) {
+        return null;
+      }
+      if (!tooLong) {
+        value += decoded;
+        if (value.length > 128) { tooLong = true; value = ''; }
+      }
+    }
+    return null;
+  };
+  const skipValue = () => {
+    const start = index;
+    const closers: string[] = [];
+    let inString = false;
+    while (index < raw.length) {
+      const char = raw[index];
+      if (inString) {
+        if (char === '\\') { index += 2; continue; }
+        if (char === '"') inString = false;
+      } else if (char === '"') {
+        inString = true;
+      } else if (char === '{' || char === '[') {
+        closers.push(char === '{' ? '}' : ']');
+      } else if (char === '}' || char === ']') {
+        if (!closers.length) return char === '}' && index > start;
+        if (closers.pop() !== char) return false;
+      } else if (char === ',' && !closers.length) {
+        return index > start;
+      }
+      index++;
+    }
+    return false;
+  };
+
+  whitespace();
+  if (raw[index++] !== '{') return null;
+  let type: string | null = null;
+  while (index < raw.length) {
+    whitespace();
+    if (raw[index] === '}') {
+      index++;
+      whitespace();
+      return index === raw.length ? type : null;
+    }
+    const key = readString();
+    if (key === null) return null;
+    whitespace();
+    if (raw[index++] !== ':') return null;
+    whitespace();
+    if (key === 'type') {
+      type = readString();
+      if (type === null) return null;
+    } else if (!skipValue()) {
+      return null;
+    }
+    whitespace();
+    if (raw[index] === ',') { index++; continue; }
+    if (raw[index] !== '}') return null;
+  }
+  return null;
+}
+
+/** Keep legacy pointer/doodle packets unrestricted; reject other oversized packets before JSON.parse. */
+export function shouldRejectOversizedRealtimeMessage(raw: string): boolean {
+  if (raw.length <= MAX_MESSAGE_BYTES && new TextEncoder().encode(raw).length <= MAX_MESSAGE_BYTES) return false;
+  const type = topLevelMessageType(raw);
+  return type !== 'pointer' && type !== 'doodle.preview';
+}
 
 export function parseScreeningMessage(raw: string): ScreeningCommand | null {
   if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_BYTES || new TextEncoder().encode(raw).length > MAX_MESSAGE_BYTES) return null;
@@ -124,6 +220,7 @@ export function transitionScreening(
     peer.pendingPause = undefined;
     peer.lastDanmakuAt = undefined;
     peer.negotiationId = undefined;
+    peer.usedNegotiationIds = undefined;
     peer.micEnabled = undefined;
   };
 
@@ -149,6 +246,7 @@ export function transitionScreening(
     actor.deviceId = command.deviceId;
     actor.sessionId = createSessionId();
     actor.lastSeq = 0;
+    actor.usedNegotiationIds = [];
     actor.sharer = false;
     actor.paused = false;
     const others = active().filter((peer) => peer !== actor);
@@ -194,7 +292,8 @@ export function transitionScreening(
     const target = active().find((peer) => peer.memberId !== actor.memberId && peer.deviceId === command.targetDeviceId);
     if (!target) return result;
     if (command.kind === 'offer') {
-      if (!actor.sharer || target.sharer || actor.negotiationId === command.negotiationId) return result;
+      if (!actor.sharer || target.sharer || actor.negotiationId === command.negotiationId || actor.usedNegotiationIds?.includes(command.negotiationId)) return result;
+      actor.usedNegotiationIds = [...(actor.usedNegotiationIds ?? []).slice(1 - MAX_USED_NEGOTIATIONS), command.negotiationId];
       actor.negotiationId = command.negotiationId;
       target.negotiationId = command.negotiationId;
     } else {
