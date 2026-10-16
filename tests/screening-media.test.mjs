@@ -27,6 +27,7 @@ class FakePeer {
   constructor(config) {
     this.config = config;
     this.senders = [];
+    this.transceivers = [];
     this.candidates = [];
     this.signalingState = 'stable';
     this.iceConnectionState = 'new';
@@ -46,7 +47,19 @@ class FakePeer {
     return sender;
   }
   removeTrack(sender) { this.senders = this.senders.filter((item) => item !== sender); }
-  async createOffer(options = {}) { this.offerOptions = options; return { type: 'offer', sdp: 'offer-sdp' }; }
+  addTransceiver(kind, options) {
+    const transceiver = { kind, direction: options.direction };
+    this.transceivers.push(transceiver);
+    return transceiver;
+  }
+  async createOffer(options = {}) {
+    this.offerOptions = options;
+    const hasAudioSender = this.senders.some((sender) => sender.track.kind === 'audio');
+    const receivesAudio = this.transceivers.some((item) => item.kind === 'audio' && item.direction === 'recvonly');
+    const audioSection = hasAudioSender ? 'm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n'
+      : receivesAudio ? 'm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n' : '';
+    return { type: 'offer', sdp: `v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n${audioSection}` };
+  }
   async createAnswer() { return { type: 'answer', sdp: 'answer-sdp' }; }
   async setLocalDescription(description) {
     this.localDescription = description;
@@ -63,7 +76,8 @@ class FakePeer {
   close() { this.closed = true; }
 }
 
-function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height: 1080 })], displayError, signalError = false } = {}) {
+function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height: 1080 })], displayError, signalError = false,
+  peerClass = FakePeer, onShareChangeOverride } = {}) {
   FakePeer.instances = [];
   const shareChanges = [];
   const micChanges = [];
@@ -88,9 +102,9 @@ function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height:
     },
   };
   const session = createScreeningMedia({
-    mediaDevices, PeerConnection: FakePeer,
+    mediaDevices, PeerConnection: peerClass,
     sendSignal: (signal) => { if (rejectSignals) throw new Error('peer not joined'); signals.push(signal); },
-    onShareChange: (value) => shareChanges.push(value),
+    onShareChange: (value) => { shareChanges.push(value); return onShareChangeOverride?.(value); },
     onMicChange: (value) => micChanges.push(value),
     onStatus: (value) => statuses.push(value),
     onQuality: (value) => qualities.push(value),
@@ -104,6 +118,24 @@ function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height:
     allowSignals() { rejectSignals = false; },
     blockSignals() { rejectSignals = true; },
   };
+}
+
+async function withStatsClock(run) {
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  let sample;
+  globalThis.setInterval = (fn, delay) => { assert.ok(delay >= 2000 && delay <= 5000); sample = fn; return 41; };
+  globalThis.clearInterval = () => {};
+  try {
+    await run(async () => {
+      assert.ok(sample, 'stats timer should be active');
+      sample();
+      await new Promise((resolve) => setImmediate(resolve));
+    });
+  } finally {
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+  }
 }
 
 test('cancelled capture leaves session intact', async () => {
@@ -128,6 +160,33 @@ test('video-only source reports no film audio', async () => {
   assert.deepEqual(ctx.peer.config.iceServers, [{ urls: 'stun:stun.cloudflare.com:3478' }]);
   assert.equal(ctx.statuses.some((value) => value.state === 'no-source-audio'), true);
   ctx.session.close();
+});
+
+test('video-only sharer offer reserves audio receive without an audio sender', async () => {
+  const ctx = harness();
+  try {
+    await ctx.session.startSharing();
+    assert.deepEqual(ctx.peer.transceivers, [{ kind: 'audio', direction: 'recvonly' }]);
+    const offer = ctx.signals.find((signal) => signal.kind === 'offer');
+    assert.match(offer.data.sdp, /m=audio[^\r\n]*\r\na=recvonly/);
+    assert.equal(ctx.peer.senders.filter((sender) => sender.track.kind === 'audio').length, 0);
+  } finally { ctx.session.close(); }
+});
+
+test('sharer with source audio or mic does not add a redundant receive transceiver', async () => {
+  const sourceAudio = harness({ screenTracks: [new FakeTrack('video'), new FakeTrack('audio')] });
+  try {
+    await sourceAudio.session.startSharing();
+    assert.deepEqual(sourceAudio.peer.transceivers, []);
+    assert.match(sourceAudio.signals.find((signal) => signal.kind === 'offer').data.sdp, /m=audio[^\r\n]*\r\na=sendrecv/);
+  } finally { sourceAudio.session.close(); }
+  const micFirst = harness();
+  try {
+    await micFirst.session.enableMic();
+    await micFirst.session.startSharing();
+    assert.deepEqual(micFirst.peer.transceivers, []);
+    assert.match(micFirst.signals.find((signal) => signal.kind === 'offer').data.sdp, /m=audio[^\r\n]*\r\na=sendrecv/);
+  } finally { micFirst.session.close(); }
 });
 
 test('source audio ending reports film audio absent while video continues', async () => {
@@ -157,6 +216,33 @@ test('stopping during capture setup does not announce a share', async () => {
     assert.deepEqual(ctx.shareChanges, []);
     assert.equal(video.stopCalls, 1);
   } finally { ctx.session.close(); }
+});
+
+test('unavailable peer connection releases captured tracks', async () => {
+  const video = new FakeTrack('video');
+  const filmAudio = new FakeTrack('audio');
+  const ctx = harness({ screenTracks: [video, filmAudio], peerClass: null });
+  try {
+    await assert.rejects(ctx.session.startSharing(), /WebRTC is unavailable/);
+    assert.equal(video.stopCalls, 1);
+    assert.equal(filmAudio.stopCalls, 1);
+    assert.deepEqual(ctx.shareChanges, []);
+  } finally { ctx.session.close(); }
+  assert.equal(video.stopCalls, 1);
+});
+
+test('rejected share callback releases tracks and peer', async () => {
+  const video = new FakeTrack('video');
+  const ctx = harness({ screenTracks: [video], onShareChangeOverride: ({ active }) => {
+    if (active) return Promise.reject(new Error('share command rejected'));
+  } });
+  try {
+    await assert.rejects(ctx.session.startSharing(), /share command rejected/);
+    assert.equal(video.stopCalls, 1);
+    assert.equal(ctx.peer.closed, true);
+    assert.deepEqual(ctx.shareChanges.map(({ active }) => active), [true, false]);
+  } finally { ctx.session.close(); }
+  assert.equal(video.stopCalls, 1);
 });
 
 test('mic is opt-in and processed', async () => {
@@ -331,6 +417,87 @@ test('direct ICE failure is explicit', async () => {
   ctx.session.close();
 });
 
+test('viewer ICE failure waits before reporting direct failure', async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = (fn, delay) => { const timer = { fn, delay, cancelled: false }; timers.push(timer); return timer; };
+  globalThis.clearTimeout = (timer) => { timer.cancelled = true; };
+  const ctx = harness();
+  try {
+    await ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n1', data: { type: 'offer', sdp: 'remote' } });
+    ctx.peer.iceConnectionState = 'failed';
+    ctx.peer.oniceconnectionstatechange();
+    assert.equal(ctx.statuses.at(-1).state, 'needs-sharer-renegotiation');
+    assert.equal(ctx.statuses.some((value) => value.state === 'direct-failed'), false);
+    const timer = timers.find((item) => !item.cancelled);
+    assert.ok(timer);
+    assert.ok(timer.delay > 0 && timer.delay <= 15_000);
+    timer.fn();
+    assert.equal(ctx.statuses.at(-1).state, 'direct-failed');
+  } finally {
+    ctx.session.close();
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
+test('new sharer offer resets viewer failure wait and connection cancels it', async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = (fn, delay) => { const timer = { fn, delay, cancelled: false }; timers.push(timer); return timer; };
+  globalThis.clearTimeout = (timer) => { timer.cancelled = true; };
+  const ctx = harness();
+  try {
+    await ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n1', data: { type: 'offer', sdp: 'remote' } });
+    const peer = ctx.peer;
+    peer.iceConnectionState = 'failed';
+    peer.oniceconnectionstatechange();
+    const oldTimer = timers.find((item) => !item.cancelled);
+    await ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n2', data: { type: 'offer', sdp: 'restart' } });
+    assert.equal(oldTimer.cancelled, true);
+    const newTimer = timers.find((item) => !item.cancelled);
+    assert.ok(newTimer, 'the new offer gets its own bounded connection wait');
+    oldTimer.fn();
+    assert.equal(ctx.statuses.some((value) => value.state === 'direct-failed'), false);
+    peer.iceConnectionState = 'connected';
+    peer.oniceconnectionstatechange();
+    assert.equal(newTimer.cancelled, true);
+    newTimer.fn();
+    assert.equal(ctx.statuses.at(-1).state, 'connected');
+  } finally {
+    ctx.session.close();
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
+test('rejected recovery offer retains a bounded viewer failure wait', async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = (fn, delay) => { const timer = { fn, delay, cancelled: false }; timers.push(timer); return timer; };
+  globalThis.clearTimeout = (timer) => { timer.cancelled = true; };
+  const ctx = harness();
+  try {
+    await ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n1', data: { type: 'offer', sdp: 'remote' } });
+    const peer = ctx.peer;
+    peer.iceConnectionState = 'failed';
+    peer.oniceconnectionstatechange();
+    peer.setRemoteDescription = async () => { throw new Error('bad replacement SDP'); };
+    await assert.rejects(ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n2', data: { type: 'offer', sdp: 'bad' } }), /bad replacement SDP/);
+    const timer = timers.find((item) => !item.cancelled);
+    assert.ok(timer, 'a rejected replacement offer must not cancel the failure deadline');
+    timer.fn();
+    assert.equal(ctx.statuses.at(-1).state, 'direct-failed');
+  } finally {
+    ctx.session.close();
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
 test('persistent disconnection exhausts bounded ICE restarts', async () => {
   const realSetTimeout = globalThis.setTimeout;
   const realClearTimeout = globalThis.clearTimeout;
@@ -385,4 +552,42 @@ test('sustained loss degrades video first', async () => {
     globalThis.setInterval = realSetInterval;
     globalThis.clearInterval = realClearInterval;
   }
+});
+
+test('failed video parameter update does not claim a lower quality tier', async () => {
+  await withStatsClock(async (sample) => {
+    const ctx = harness();
+    try {
+      await ctx.session.startSharing();
+      const videoSender = ctx.peer.senders.find((sender) => sender.track.kind === 'video');
+      videoSender.setParameters = async () => { throw new Error('unsupported parameters'); };
+      ctx.peer.stats = new Map([
+        ['out', { type: 'outbound-rtp', kind: 'video', framesPerSecond: 30 }],
+        ['loss', { type: 'remote-inbound-rtp', kind: 'video', fractionLost: 0.2 }],
+      ]);
+      await sample();
+      await sample();
+      assert.equal(ctx.qualities.at(-1).tier, '1080p');
+      assert.equal(ctx.statuses.some((value) => value.state === 'quality-limited'), true);
+    } finally { ctx.session.close(); }
+  });
+});
+
+test('missing network measurements do not restore high video quality', async () => {
+  await withStatsClock(async (sample) => {
+    const ctx = harness();
+    try {
+      await ctx.session.startSharing();
+      ctx.peer.stats = new Map([
+        ['out', { type: 'outbound-rtp', kind: 'video', framesPerSecond: 30 }],
+        ['loss', { type: 'remote-inbound-rtp', kind: 'video', fractionLost: 0.2 }],
+      ]);
+      await sample();
+      await sample();
+      assert.equal(ctx.qualities.at(-1).tier, '720p');
+      ctx.peer.stats = new Map([['out', { type: 'outbound-rtp', kind: 'video', framesPerSecond: 30 }]]);
+      for (let i = 0; i < 4; i++) await sample();
+      assert.equal(ctx.qualities.at(-1).tier, '720p');
+    } finally { ctx.session.close(); }
+  });
 });

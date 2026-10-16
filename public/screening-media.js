@@ -2,6 +2,7 @@ const ICE_SERVERS = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 const STATS_INTERVAL_MS = 3000;
 const DISCONNECT_GRACE_MS = 3000;
 const RECOVERY_WAIT_MS = 5000;
+const VIEWER_RECOVERY_WAIT_MS = 10_000;
 const MAX_ICE_RESTARTS = 2;
 const MIC_CONSTRAINTS = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
 
@@ -60,6 +61,7 @@ export function createScreeningMedia({
   let captureGeneration = 0;
   let restartAttempts = 0;
   let recoveryBusy = false;
+  let viewerRecoveryPending = false;
   let failureReported = false;
   let qualityTier = '1080p';
   let badSamples = 0;
@@ -86,6 +88,16 @@ export function createScreeningMedia({
     disconnectTimer = null;
   }
 
+  function scheduleDisconnect(callback, delay) {
+    clearDisconnectTimer();
+    const timer = setTimeout(() => {
+      if (disconnectTimer !== timer) return;
+      disconnectTimer = null;
+      callback();
+    }, delay);
+    disconnectTimer = timer;
+  }
+
   function releasePeer() {
     clearDisconnectTimer();
     if (statsTimer !== null) clearInterval(statsTimer);
@@ -107,6 +119,7 @@ export function createScreeningMedia({
     remoteStream = null;
     restartAttempts = 0;
     recoveryBusy = false;
+    viewerRecoveryPending = false;
     failureReported = false;
     badSamples = 0;
     goodSamples = 0;
@@ -117,8 +130,19 @@ export function createScreeningMedia({
   function failDirect() {
     if (failureReported || closed) return;
     failureReported = true;
+    viewerRecoveryPending = false;
     clearDisconnectTimer();
     report('direct-failed', statusMessage);
+  }
+
+  function waitForViewerRecovery(current, id, requestOffer) {
+    if (peer !== current || closed) return;
+    viewerRecoveryPending = true;
+    if (requestOffer) report('needs-sharer-renegotiation', 'Ask the sharer to reconnect.');
+    scheduleDisconnect(() => {
+      if (peer === current && negotiationId === id && !closed &&
+          current.iceConnectionState !== 'connected' && current.iceConnectionState !== 'completed') failDirect();
+    }, VIEWER_RECOVERY_WAIT_MS);
   }
 
   function ensurePeer() {
@@ -145,17 +169,18 @@ export function createScreeningMedia({
       const state = current.iceConnectionState;
       if (state === 'connected' || state === 'completed') {
         clearDisconnectTimer();
+        viewerRecoveryPending = false;
         restartAttempts = 0;
         failureReported = false;
         report('connected');
       } else if (state === 'disconnected') {
         report('disconnected');
-        clearDisconnectTimer();
-        disconnectTimer = setTimeout(() => {
-          disconnectTimer = null;
+        if (viewerRecoveryPending) return;
+        scheduleDisconnect(() => {
           if (peer === current && current.iceConnectionState === 'disconnected') void recoverIce();
         }, DISCONNECT_GRACE_MS);
       } else if (state === 'failed') {
+        if (viewerRecoveryPending) return;
         clearDisconnectTimer();
         void recoverIce();
       } else if (state === 'checking') {
@@ -164,6 +189,10 @@ export function createScreeningMedia({
     };
     if (micTrack && micTrack.readyState !== 'ended') micSender = current.addTrack(micTrack, micStream);
     if (screenStream) attachScreenTracks(current);
+    // A video-only offer still needs an audio m-line so the viewer can answer with a mic track.
+    if (screenStream && !micSender && !screenSenders.some((sender) => sender.track.kind === 'audio')) {
+      current.addTransceiver('audio', { direction: 'recvonly' });
+    }
     statsTimer = setInterval(() => { void sampleQuality().catch(() => report('stats-unavailable')); }, STATS_INTERVAL_MS);
     return current;
   }
@@ -227,8 +256,7 @@ export function createScreeningMedia({
   async function recoverIce() {
     if (closed || !peer || recoveryBusy || failureReported) return;
     if (!screenStream) {
-      report('needs-sharer-renegotiation', 'Ask the sharer to reconnect.');
-      failDirect();
+      if (!viewerRecoveryPending) waitForViewerRecovery(peer, negotiationId, true);
       return;
     }
     if (restartAttempts >= MAX_ICE_RESTARTS) { failDirect(); return; }
@@ -241,19 +269,15 @@ export function createScreeningMedia({
       recoveryBusy = false;
       if (peer === current && !closed && !failureReported &&
           current.iceConnectionState !== 'connected' && current.iceConnectionState !== 'completed') {
-        clearDisconnectTimer();
-        disconnectTimer = setTimeout(() => {
-          disconnectTimer = null;
-          void recoverIce();
-        }, RECOVERY_WAIT_MS);
+        scheduleDisconnect(() => { void recoverIce(); }, RECOVERY_WAIT_MS);
       }
     }
   }
 
   async function setVideoTier(tier) {
-    if (!screenVideo || !peer) return;
+    if (!screenVideo || !peer) return false;
     const sender = screenSenders.find((item) => item.track === screenVideo);
-    if (!sender) return;
+    if (!sender) return false;
     const settings = screenVideo.getSettings?.() || {};
     const scale = tier === '720p' ? Math.max(1, (settings.width || 1280) / 1280, (settings.height || 720) / 720) : 1;
     try {
@@ -262,8 +286,12 @@ export function createScreeningMedia({
       parameters.encodings[0].maxBitrate = tier === '720p' ? 1_200_000 : 2_500_000;
       parameters.encodings[0].scaleResolutionDownBy = scale;
       await sender.setParameters(parameters);
-    } catch { report('quality-limited'); }
-    qualityTier = tier;
+      qualityTier = tier;
+      return true;
+    } catch {
+      report('quality-limited');
+      return false;
+    }
   }
 
   function readStats(stats) {
@@ -304,7 +332,8 @@ export function createScreeningMedia({
       const bad = (sample.lossFraction !== null && sample.lossFraction >= 0.08) ||
         (sample.rttMs !== null && sample.rttMs >= 350) ||
         (sample.jitterMs !== null && sample.jitterMs >= 60);
-      const good = (sample.lossFraction === null || sample.lossFraction <= 0.02) &&
+      const measured = sample.lossFraction !== null || sample.rttMs !== null || sample.jitterMs !== null;
+      const good = measured && (sample.lossFraction === null || sample.lossFraction <= 0.02) &&
         (sample.rttMs === null || sample.rttMs <= 180) &&
         (sample.jitterMs === null || sample.jitterMs <= 25);
       badSamples = bad ? badSamples + 1 : 0;
@@ -354,15 +383,30 @@ export function createScreeningMedia({
     } catch { /* Browser/source may fix capture dimensions. */ }
     if (closed || generation !== captureGeneration || screenStream !== captured) throw new Error('Screen capture was cancelled');
     const hasSourceAudio = captured.getAudioTracks().some((track) => track.readyState !== 'ended');
-    if (!hasSourceAudio) report('no-source-audio', 'No film audio is being shared.');
-    if (peer && !screenSenders.length) releasePeer();
-    ensurePeer();
-    shareAnnounced = true;
-    await Promise.resolve(onShareChange({ active: true, hasSourceAudio }));
-    if (closed || generation !== captureGeneration) return { hasVideo: true, hasSourceAudio };
-    await setVideoTier('1080p');
-    await sendOffer();
-    return { hasVideo: true, hasSourceAudio };
+    try {
+      if (!hasSourceAudio) report('no-source-audio', 'No film audio is being shared.');
+      if (peer && !screenSenders.length) releasePeer();
+      ensurePeer();
+      shareAnnounced = true;
+      await Promise.resolve(onShareChange({ active: true, hasSourceAudio }));
+      if (closed || generation !== captureGeneration) return { hasVideo: true, hasSourceAudio };
+      await setVideoTier('1080p');
+      await sendOffer();
+      return { hasVideo: true, hasSourceAudio };
+    } catch (error) {
+      if (screenStream === captured) {
+        const notifyStopped = shareAnnounced && !closed;
+        shareAnnounced = false;
+        stopSharing();
+        if (notifyStopped) {
+          try { await onShareChange({ active: false, hasSourceAudio: false }); }
+          catch { report('signaling-error'); }
+        }
+      } else {
+        stopStream(captured);
+      }
+      throw error;
+    }
   }
 
   function stopSharing() {
@@ -433,6 +477,10 @@ export function createScreeningMedia({
       if (screenStream || data.type !== 'offer' || typeof data.sdp !== 'string' || !data.sdp) return false;
       if (incomingId === negotiationId) return false;
       const current = ensurePeer();
+      const recovering = viewerRecoveryPending || current.iceConnectionState === 'failed' || current.iceConnectionState === 'disconnected';
+      clearDisconnectTimer();
+      viewerRecoveryPending = false;
+      failureReported = false;
       negotiationId = incomingId;
       remoteDescriptionReady = false;
       pendingRemoteIce = [];
@@ -449,7 +497,16 @@ export function createScreeningMedia({
         await sendSignal({ kind: 'answer', negotiationId: incomingId, data: { type: 'answer', sdp: current.localDescription.sdp } });
         sendingDescription = false;
         await flushLocalIce(incomingId);
+        if (recovering && current.iceConnectionState !== 'connected' && current.iceConnectionState !== 'completed') {
+          waitForViewerRecovery(current, incomingId, false);
+        }
         return true;
+      } catch (error) {
+        if (recovering && peer === current && !closed &&
+            current.iceConnectionState !== 'connected' && current.iceConnectionState !== 'completed') {
+          waitForViewerRecovery(current, incomingId, false);
+        }
+        throw error;
       } finally {
         sendingDescription = false;
       }
