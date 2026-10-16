@@ -1,6 +1,7 @@
-import { WaterBackground } from './water-background.js?v=6';
+import { WaterBackground } from './water-background.js?v=7';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
 import { DoodleCanvas } from './doodle-canvas.js?v=5';
+import { createScreeningRoom } from './screening-room.js?v=1';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -31,6 +32,8 @@ let backgroundSelectionVersion = 0;
 let selectedTheme = 'light';
 let toastTimer = null;
 let socket = null;
+let reconnectTimer = null;
+let screening = null;
 let recorder = null;
 let recorderStartedAt = 0;
 let recorderTimer = null;
@@ -180,7 +183,7 @@ async function prepareBackgroundFile(file) {
 }
 
 function isDoodleSurface(event) {
-  return !event.target?.closest?.('button, input, textarea, select, form, .edge-rail, .settings-dialog, .auth-gate, .room-gate, .context-menu');
+  return !document.body.classList.contains('is-screening') && !event.target?.closest?.('button, input, textarea, select, form, .edge-rail, .settings-dialog, .auth-gate, .room-gate, .context-menu, .screening-room');
 }
 
 function isTouchPointer(event) {
@@ -420,7 +423,7 @@ async function api(path, options = {}) {
 async function loadState() {
   try {
     state = await api('/api/state'); applyTheme(state.theme); elements.contrastRange.value = state.contrast ?? 1; elements.brightnessRange.value = state.brightness ?? 1; setRetentionControl(elements.taskRetentionDays, elements.taskRetentionForever, state.taskRetentionDays ?? 1); setRetentionControl(elements.voiceRetentionDays, elements.voiceRetentionForever, state.voiceRetentionDays ?? 1); updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast ?? 1, state.brightness ?? 1); elements.timezoneLabel.textContent = state.timeZone || '本地时间'; elements.inviteUrl.value = state.inviteUrl || ''; elements.roomMembers.textContent = `${(state.members || []).length} / 2`;
-    setBrushSettings(state.brushColor); doodle.hydrate(state.doodles || [], memberId); clearDoodleHistory(); renderTasks(); renderVoiceNotes(); render(); if (roomId) connectRealtime();
+    setBrushSettings(state.brushColor); doodle.hydrate(state.doodles || [], memberId); clearDoodleHistory(); renderTasks(); renderVoiceNotes(); render(); if (roomId) { ensureScreening(); connectRealtime(); }
   } catch (error) { elements.targetSummary.textContent = '请确认后端服务正在运行'; console.error(error); }
 }
 
@@ -591,7 +594,8 @@ async function syncEphemeralState() {
 function updateTaskFromEvent(task) { const item = state.tasks.find((candidate) => candidate.id === task.id); if (item) Object.assign(item, task); renderTasks(); }
 function applyRealtimeEvent(event) {
   const payload = event.payload || {};
-  if (event.type === 'pointer') window.setTimeout(() => water.addRipple(payload.x, payload.y, Number(payload.strength || 0.04) * 0.72), 110);
+  if (event.type.startsWith('screening.')) screening?.handleEvent(event);
+  else if (event.type === 'pointer' && !document.body.classList.contains('is-screening')) window.setTimeout(() => { if (!document.body.classList.contains('is-screening')) water.addRipple(payload.x, payload.y, Number(payload.strength || 0.04) * 0.72); }, 110);
   else if (event.type === 'settings.updated') { state.targetAt = payload.targetAt; state.blurPx = payload.blurPx; state.contrast = payload.contrast ?? 1; state.brightness = payload.brightness ?? 1; state.taskRetentionDays = payload.taskRetentionDays ?? state.taskRetentionDays ?? 1; state.voiceRetentionDays = payload.voiceRetentionDays ?? state.voiceRetentionDays ?? 1; state.slogan = payload.slogan ?? state.slogan ?? '把想念留给时间'; if (payload.actorId === memberId) { state.brushColor = payload.brushColor || state.brushColor; state.brushStyle = 'neon'; setBrushSettings(state.brushColor); } elements.contrastRange.value = state.contrast; elements.brightnessRange.value = state.brightness; setRetentionControl(elements.taskRetentionDays, elements.taskRetentionForever, state.taskRetentionDays); setRetentionControl(elements.voiceRetentionDays, elements.voiceRetentionForever, state.voiceRetentionDays); updateToneLabels(); setBackground(currentBackground(), state.blurPx, state.contrast, state.brightness); render(); }
   else if (event.type === 'background.updated') { state.backgroundUrl = payload.backgroundUrl; state.backgroundDataUrl = null; setBackground(currentBackground(), state.blurPx); }
   else if (event.type === 'task.created') { state.tasks = [...(state.tasks || []).filter((task) => task.id !== payload.id), payload]; renderTasks(); }
@@ -604,7 +608,7 @@ function applyRealtimeEvent(event) {
   else if (event.type === 'doodle.created') { state.doodles = [...(state.doodles || []).filter((stroke) => stroke.id !== payload.id), payload]; doodle.add(payload); }
   else if (event.type === 'doodle.deleted') { state.doodles = (state.doodles || []).filter((stroke) => stroke.id !== payload.id); doodle.remove(payload.id); }
   else if (event.type === 'room.joined') { state.members = [...(state.members || []).filter((member) => member.id !== payload.userId), { id: payload.userId, username: payload.username, slot: payload.slot }].sort((a, b) => a.slot - b.slot); elements.roomMembers.textContent = `${state.members.length} / 2`; showToast(`${payload.username || '对方'} 已加入房间`); }
-  else if (event.type === 'room.destroyed') { clearDoodleHistory(); state = null; socket?.close(); socket = null; showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
+  else if (event.type === 'room.destroyed') { screening?.handleEvent(event); clearDoodleHistory(); teardownRoom(); showRoomGate('房间已被退出的一方销毁，请创建一个新的房间。'); showToast('房间已销毁'); }
   else if (event.type === 'ephemeral.cleared') {
     const taskIds = Array.isArray(payload.taskIds) ? new Set(payload.taskIds) : null;
     const voiceIds = Array.isArray(payload.voiceIds) ? new Set(payload.voiceIds) : null;
@@ -614,12 +618,59 @@ function applyRealtimeEvent(event) {
   }
 }
 
+function ensureScreening() {
+  if (screening) return;
+  screening = createScreeningRoom({
+    root: $('#screening-room'), trigger: $('#open-screening'),
+    send(command) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(command));
+      return true;
+    },
+    getContext: () => ({ roomId, memberId, members: state?.members || [] }),
+    onOpenChange(open) {
+      document.body.classList.toggle('is-screening', open);
+      if (open) {
+        cancelActiveDoodle();
+        activeTouchPointers.clear();
+        touchEraseGesture = null;
+      }
+      lastPointer = null;
+      water.setSuspended(open);
+      if (!open) render();
+    },
+  });
+}
+
+function teardownRoom() {
+  if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  roomId = null;
+  screening?.onSocketClose();
+  screening?.dispose();
+  screening = null;
+  const oldSocket = socket;
+  socket = null;
+  oldSocket?.close();
+  state = null;
+}
+
 function connectRealtime() {
   if (!roomId || socket) return;
+  if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  socket = new WebSocket(`${protocol}//${location.host}/ws?room=${encodeURIComponent(roomId)}`);
-  socket.addEventListener('message', (message) => { try { applyRealtimeEvent(JSON.parse(message.data)); } catch { /* ignore malformed packets */ } });
-  socket.addEventListener('close', () => { socket = null; window.setTimeout(connectRealtime, 1800); }); socket.addEventListener('error', () => socket?.close());
+  const realtime = new WebSocket(`${protocol}//${location.host}/ws?room=${encodeURIComponent(roomId)}`);
+  socket = realtime;
+  realtime.addEventListener('open', () => { if (socket === realtime) screening?.onSocketOpen(); });
+  realtime.addEventListener('message', (message) => { if (socket !== realtime || !roomId) return; try { applyRealtimeEvent(JSON.parse(message.data)); } catch { /* ignore malformed packets */ } });
+  realtime.addEventListener('close', () => {
+    if (socket !== realtime) return;
+    socket = null;
+    screening?.onSocketClose();
+    if (roomId) reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connectRealtime(); }, 1800);
+  });
+  realtime.addEventListener('error', () => realtime.close());
 }
 function sendPointer(x, y, strength) { if (!socket || socket.readyState !== WebSocket.OPEN) return; const now = performance.now(); if (now - lastPointerSentAt < 60) return; lastPointerSentAt = now; socket.send(JSON.stringify({ type: 'pointer', payload: { x, y, strength } })); }
 
@@ -707,12 +758,13 @@ async function destroyCurrentRoom() {
   if (!roomId || !window.confirm('退出后，这个房间和其中的任务、录音会立即销毁，另一方也会被通知。继续吗？')) return;
   elements.destroyRoom.disabled = true;
   try {
-    await api('/api/room', { method: 'DELETE' }); clearDoodleHistory(); socket?.close(); socket = null; roomId = null; state = null; history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); hideSettings();
+    await api('/api/room', { method: 'DELETE' }); clearDoodleHistory(); teardownRoom(); history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); hideSettings();
   } catch (error) { showToast(error.message); } finally { elements.destroyRoom.disabled = false; }
 }
 
 async function logout() {
-  await fetch('/api/auth/logout', { method: 'POST' }); clearDoodleHistory(); socket?.close(); socket = null; currentUser = null; memberId = null; location.href = '/';
+  teardownRoom();
+  await fetch('/api/auth/logout', { method: 'POST' }); clearDoodleHistory(); currentUser = null; memberId = null; location.href = '/';
 }
 
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
@@ -766,6 +818,7 @@ function processDoodleMove(event) {
 }
 
 window.addEventListener('pointermove', (event) => {
+  if (document.body.classList.contains('is-screening')) return;
   if (event.pointerType === 'touch') activeTouchPointers.set(event.pointerId, event);
   const pointer = waterPoint(event); const x = pointer.x; const y = pointer.y; const now = performance.now(); const distance = lastPointer ? Math.hypot(x - lastPointer.x, y - lastPointer.y) : 0;
   if (distance > 0.004) { const strength = Math.min(0.12, 0.025 + distance * 0.9); water.addRipple(x, y, strength); sendPointer(x, y, strength); }
@@ -781,6 +834,7 @@ window.addEventListener('pointermove', (event) => {
   setRailHover(elements.taskRail, isRailHoverTarget(event, elements.taskRail));
 }, { passive: false });
 window.addEventListener('pointerdown', (event) => {
+  if (document.body.classList.contains('is-screening')) return;
   if (event.pointerType === 'touch') activeTouchPointers.set(event.pointerId, event);
   const surface = isDoodleSurface(event);
   const pointer = waterPoint(event); water.addRipple(pointer.x, pointer.y, 0.12);

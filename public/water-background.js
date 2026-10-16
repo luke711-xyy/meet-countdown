@@ -127,6 +127,8 @@ export class WaterBackground {
     this.imageRequest = 0;
     this.animationFrame = 0;
     this.running = false;
+    this.suspended = false;
+    this.resizePending = false;
     this.activeUntil = 0;
     this.contextLost = false;
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -277,7 +279,7 @@ export class WaterBackground {
   }
 
   addRipple(x, y, strength = 0.05) {
-    if (!this.ready) return;
+    if (this.suspended || !this.ready) return;
     this.impulses.push(new THREE.Vector3(Math.min(1, Math.max(0, x)), 1 - Math.min(1, Math.max(0, y)), Math.min(0.16, Math.max(0.01, strength))));
     if (this.impulses.length > MAX_IMPULSES) this.impulses.shift();
     this.wake(1600);
@@ -285,6 +287,8 @@ export class WaterBackground {
 
   resize() {
     if (!this.renderer) return;
+    if (this.suspended) { this.resizePending = true; return; }
+    this.resizePending = false;
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.round(rect.width || document.documentElement.clientWidth || window.innerWidth));
     const height = Math.max(1, Math.round(rect.height || document.documentElement.clientHeight || window.innerHeight));
@@ -299,7 +303,7 @@ export class WaterBackground {
   }
 
   wake(duration = 1200) {
-    if (this.contextLost) return;
+    if (this.suspended || this.contextLost) return;
     this.activeUntil = Math.max(this.activeUntil, performance.now() + duration);
     if (this.running) return;
     this.running = true;
@@ -310,6 +314,20 @@ export class WaterBackground {
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     this.animationFrame = 0;
     this.running = false;
+  }
+
+  setSuspended(suspended) {
+    if (this.suspended === Boolean(suspended)) return;
+    this.suspended = Boolean(suspended);
+    if (this.suspended) {
+      this.stop();
+      this.impulses = [];
+      this.activeUntil = 0;
+      return;
+    }
+    if (this.resizePending) this.resize();
+    this.doodleDirty = true;
+    this.wake(0);
   }
 
   handleContextLost(event) {
@@ -331,7 +349,7 @@ export class WaterBackground {
 
   render(time) {
     this.animationFrame = 0;
-    if (this.contextLost || !this.renderer || !this.simulation || !this.background) {
+    if (this.suspended || this.contextLost || !this.renderer || !this.simulation || !this.background) {
       this.running = false;
       return;
     }
