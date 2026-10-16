@@ -751,6 +751,9 @@ export class CoupleRoom extends DurableObject<Env> {
     const message = JSON.stringify(event);
     for (const socket of this.ctx.getWebSockets()) {
       try { socket.send(message); } catch { /* disconnected sockets are cleaned by the runtime */ }
+      if (event.type === 'room.destroyed') {
+        try { socket.close(1000, 'Room destroyed'); } catch { /* socket already closed */ }
+      }
     }
   }
 
