@@ -34,7 +34,8 @@ function setup({ capture = true, sendResponse = () => true } = {}) {
   });
   const event = (type, payload) => controller.handleEvent({ type, payload });
   const joined = (peers = []) => event('screening.joined', { sessionId: 's1', memberId: 'm1', deviceId: sent[0]?.payload.deviceId, peers });
-  const shareAck = (hasSourceAudio) => event('screening.share.changed', { memberId: 'm1', deviceId: sent[0]?.payload.deviceId, active: true, hasSourceAudio });
+  const shareAck = (hasSourceAudio, requestSeq = sent.findLast((command) => command.type === 'screening.share' && command.payload.active)?.payload.seq) =>
+    event('screening.share.changed', { memberId: 'm1', deviceId: sent[0]?.payload.deviceId, active: true, hasSourceAudio, requestSeq });
   return { dom, document, root, trigger, sent, media, controller, event, joined, shareAck };
 }
 
@@ -233,10 +234,69 @@ test('share ack timeout, stalled send, and socket loss release pending capture',
       const releasesBefore = room.sent.filter((command) => command.type === 'screening.share' && !command.payload.active).length;
       room.shareAck(true);
       assert.equal(document.querySelector('#screening-share').getAttribute('aria-pressed'), 'false');
-      assert.ok(room.sent.filter((command) => command.type === 'screening.share' && !command.payload.active).length > releasesBefore);
+      assert.equal(room.sent.filter((command) => command.type === 'screening.share' && !command.payload.active).length, releasesBefore);
     }
     controller.close();
   }
+});
+
+test('stale share echoes cannot confirm or cancel an immediate retry', async () => {
+  const room = setup();
+  const { dom, controller, joined, event, sent, media, document } = room;
+  await controller.open(); joined([{ memberId: 'm2', deviceId: 'd2', sharer: false }]);
+  let shareTimeout;
+  const originalSet = dom.window.setTimeout.bind(dom.window);
+  const originalClear = dom.window.clearTimeout.bind(dom.window);
+  dom.window.setTimeout = (callback, delay) => delay === 8000 ? (shareTimeout = callback, 99999) : originalSet(callback, delay);
+  dom.window.clearTimeout = (id) => { if (id !== 99999) originalClear(id); };
+  let captures = 0;
+  let released = 0;
+  media[0].startSharing = async () => {
+    captures++;
+    try {
+      await media[0].callbacks.onShareChange({ active: true, hasSourceAudio: true });
+      await media[0].callbacks.sendSignal({ kind: 'offer', negotiationId: `n${captures}`, data: { type: 'offer', sdp: 'v=0' } });
+    } catch {
+      released++;
+      await media[0].callbacks.onShareChange({ active: false, hasSourceAudio: false });
+      throw new Error('share abandoned');
+    }
+  };
+
+  document.querySelector('#screening-share').click();
+  await tick();
+  assert.deepEqual(sent.filter((command) => command.type === 'screening.share').map(({ payload }) => [payload.seq, payload.active]), [[1, true]]);
+  shareTimeout();
+  await tick();
+  assert.equal(released, 1);
+  assert.deepEqual(sent.filter((command) => command.type === 'screening.share').map(({ payload }) => [payload.seq, payload.active]), [[1, true], [2, false]]);
+
+  document.querySelector('#screening-share').click();
+  await tick();
+  assert.equal(captures, 2);
+  assert.deepEqual(sent.filter((command) => command.type === 'screening.share').map(({ payload }) => [payload.seq, payload.active]), [[1, true], [2, false], [3, true]]);
+  const localEvent = (active, requestSeq) => event('screening.share.changed', {
+    memberId: 'm1', deviceId: sent[0].payload.deviceId, active, hasSourceAudio: active, requestSeq,
+  });
+  localEvent(true, 1);
+  await tick();
+  assert.equal(document.querySelector('#screening-share').getAttribute('aria-pressed'), 'false');
+  assert.equal(sent.some((command) => command.type === 'screening.signal'), false);
+  assert.equal(sent.filter((command) => command.type === 'screening.share').length, 3);
+  localEvent(false, 2);
+  await tick();
+  assert.equal(document.querySelector('#screening-share').getAttribute('aria-pressed'), 'false');
+  assert.equal(sent.some((command) => command.type === 'screening.signal'), false);
+
+  localEvent(true, 3);
+  await tick();
+  assert.equal(document.querySelector('#screening-share').getAttribute('aria-pressed'), 'true');
+  assert.equal(sent.filter((command) => command.type === 'screening.signal').length, 1);
+  localEvent(true, 1);
+  localEvent(false, 2);
+  assert.equal(document.querySelector('#screening-share').getAttribute('aria-pressed'), 'true');
+  assert.equal(sent.filter((command) => command.type === 'screening.share').length, 3);
+  controller.close();
 });
 
 test('late join snapshot and source audio loss keep viewer notice visible', async () => {

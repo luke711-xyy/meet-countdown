@@ -44,7 +44,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   let pendingPause = null;
   let sourceAudioMissing = false;
   let pendingShare = null;
-  let abandonedShare = false;
+  let latestShareRequestSeq = 0;
+  let latestReleaseSeq = 0;
+  let confirmedShareSeq = 0;
   let idleTimer = null;
   let micStatusExpected = false;
   let viewerRejoins = 0;
@@ -63,7 +65,6 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     const pending = pendingShare;
     pendingShare = null;
     win.clearTimeout(pending.timer);
-    abandonedShare = true;
     pending.reject(new Error(message));
     render();
   }
@@ -85,9 +86,14 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     if (result === false) throw new Error('放映室连接已断开');
     return Promise.resolve(result);
   }
-  function command(type, fields = {}) {
+  function command(type, fields = {}, onSequence = () => {}) {
     if (!sessionId) throw new Error('尚未加入放映室');
-    return sendRaw(type, { sessionId, seq: ++seq, ...fields });
+    const requestSeq = ++seq;
+    onSequence(requestSeq);
+    return sendRaw(type, { sessionId, seq: requestSeq, ...fields });
+  }
+  function releaseShare() {
+    return command('screening.share', { active: false, hasSourceAudio: false }, (requestSeq) => { latestReleaseSeq = requestSeq; });
   }
   function join(takeover = false) {
     if (!opened || !context().roomId) return Promise.resolve(false);
@@ -134,19 +140,21 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
         if (active && isSharer) {
           sourceAudioMissing = !hasSourceAudio;
           render();
-          try { await command('screening.share', { active: true, hasSourceAudio: Boolean(hasSourceAudio) }); }
+          try {
+            await command('screening.share', { active: true, hasSourceAudio: Boolean(hasSourceAudio) },
+              (requestSeq) => { latestShareRequestSeq = requestSeq; });
+          }
           catch { status('影片声音状态发送失败'); }
           return;
         }
         if (active) {
           if (pendingShare) return pendingShare.promise;
-          abandonedShare = false;
           const pending = {};
           pending.promise = new Promise((resolve, reject) => { pending.resolve = resolve; pending.reject = reject; });
           pending.timer = win.setTimeout(() => {
             if (pendingShare !== pending) return;
             rejectPendingShare('共享确认超时');
-            try { void command('screening.share', { active: false, hasSourceAudio: false }).catch(() => {}); } catch { /* Session may have closed. */ }
+            try { void releaseShare().catch(() => {}); } catch { /* Session may have closed. */ }
             status('共享确认超时，请重试');
           }, SHARE_ACK_TIMEOUT_MS);
           pendingShare = pending;
@@ -154,12 +162,14 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
           status('等待服务器确认共享…');
           render();
           try {
-            void command('screening.share', { active: true, hasSourceAudio: Boolean(hasSourceAudio) })
+            void command('screening.share', { active: true, hasSourceAudio: Boolean(hasSourceAudio) },
+              (requestSeq) => { pending.requestSeq = requestSeq; latestShareRequestSeq = requestSeq; })
               .catch((error) => { if (pendingShare === pending) rejectPendingShare(error.message); });
           } catch (error) { rejectPendingShare(error.message); }
           return pending.promise;
         }
         rejectPendingShare('共享已停止');
+        if (!isSharer && latestReleaseSeq > latestShareRequestSeq) return;
         if (isSharer) {
           isSharer = false;
           sharerId = null;
@@ -169,7 +179,7 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
           status('等待共享画面');
           render();
         }
-        try { await command('screening.share', { active: false, hasSourceAudio: false }); }
+        try { await releaseShare(); }
         catch { status('停止共享通知失败'); }
       },
       onMicChange: async (enabled) => {
@@ -279,7 +289,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     paused = false;
     pendingPause = null;
     sourceAudioMissing = false;
-    abandonedShare = false;
+    latestShareRequestSeq = 0;
+    latestReleaseSeq = 0;
+    confirmedShareSeq = 0;
     micStatusExpected = false;
     viewerRejoins = 0;
     rejoining = false;
@@ -313,6 +325,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
       if (payload.deviceId !== myDeviceId || !payload.sessionId) return;
       sessionId = payload.sessionId;
       seq = 0;
+      latestShareRequestSeq = 0;
+      latestReleaseSeq = 0;
+      confirmedShareSeq = 0;
       ui.takeover.hidden = true;
       const other = payload.peers?.find((item) => item.memberId !== context().memberId);
       peer = other ? { memberId: other.memberId, deviceId: other.deviceId } : null;
@@ -343,25 +358,32 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
       render();
     } else if (type === 'screening.share.changed') {
       if (payload.memberId === context().memberId) {
+        const requestSeq = payload.requestSeq;
+        if (!Number.isSafeInteger(requestSeq) || requestSeq < 1) return;
         if (payload.active && pendingShare) {
+          if (requestSeq !== pendingShare.requestSeq) return;
           const pending = pendingShare;
           pendingShare = null;
           win.clearTimeout(pending.timer);
           isSharer = true;
           sharerId = payload.memberId;
           sourceAudioMissing = payload.hasSourceAudio !== true;
+          confirmedShareSeq = requestSeq;
           pending.resolve();
-        } else if (payload.active && abandonedShare) {
-          try { void command('screening.share', { active: false, hasSourceAudio: false }).catch(() => {}); } catch { /* Session may have closed. */ }
-        } else if (payload.active && !isSharer) {
-          abandonedShare = true;
-          try { void command('screening.share', { active: false, hasSourceAudio: false }).catch(() => {}); } catch { /* Session may have closed. */ }
-        } else if (!payload.active) {
+        } else if (payload.active && isSharer) {
+          if (requestSeq < confirmedShareSeq || requestSeq <= latestReleaseSeq) return;
+          confirmedShareSeq = requestSeq;
+          sourceAudioMissing = payload.hasSourceAudio !== true;
+        } else if (payload.active) {
+          if (requestSeq <= latestReleaseSeq) return;
+          try { void releaseShare().catch(() => {}); } catch { /* Session may have closed. */ }
+          return;
+        } else {
+          if (pendingShare || requestSeq !== latestReleaseSeq || requestSeq < confirmedShareSeq) return;
           isSharer = false;
           if (sharerId === payload.memberId) sharerId = null;
           sourceAudioMissing = false;
-          abandonedShare = false;
-        } else if (isSharer) sourceAudioMissing = payload.hasSourceAudio !== true;
+        }
       } else {
         if (payload.active) {
           rejectPendingShare('对方已开始共享');
@@ -410,7 +432,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     sharerId = null;
     isSharer = false;
     sourceAudioMissing = false;
-    abandonedShare = false;
+    latestShareRequestSeq = 0;
+    latestReleaseSeq = 0;
+    confirmedShareSeq = 0;
     media?.close();
     media = null;
     micEverEnabled = false;
@@ -427,7 +451,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     sharerId = null;
     isSharer = false;
     sourceAudioMissing = false;
-    abandonedShare = false;
+    latestShareRequestSeq = 0;
+    latestReleaseSeq = 0;
+    confirmedShareSeq = 0;
     media?.close();
     media = null;
     micEverEnabled = false;
