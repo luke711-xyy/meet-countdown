@@ -68,20 +68,116 @@ test('enforces two-member device and sharer ownership', () => {
   peers = joined(takeover.peers, 'b1', 'bob-tablet');
   const thirdMember = send(peers, 'c1', 'screening.join', { deviceId: 'charlie-phone', takeover: false });
   assert.equal(peer(thirdMember.peers, 'c1').sessionId, undefined);
-  peers = command(peers, 'a2', 'screening.share', 1, { active: true }).peers;
-  const secondSharer = command(peers, 'b1', 'screening.share', 1, { active: true });
+  peers = command(peers, 'a2', 'screening.share', 1, { active: true, hasSourceAudio: false }).peers;
+  const secondSharer = command(peers, 'b1', 'screening.share', 1, { active: true, hasSourceAudio: false });
   assert.equal(secondSharer.events.some((event) => event.type === 'screening.share.changed'), false);
   assert.equal(peer(secondSharer.peers, 'b1').sharer, false);
   peers = command(secondSharer.peers, 'a2', 'screening.share', 2, { active: false }).peers;
-  const handoff = command(peers, 'b1', 'screening.share', 2, { active: true });
+  const handoff = command(peers, 'b1', 'screening.share', 2, { active: true, hasSourceAudio: false });
   assert.equal(peer(handoff.peers, 'b1').sharer, true);
   assert.equal(handoff.events.filter((event) => event.type === 'screening.share.changed').length, 2);
+});
+
+test('requires boolean source audio for active share and rejects true on inactive share', () => {
+  const parse = (active, hasSourceAudio, includeAudio = true) => parseScreeningMessage(JSON.stringify({
+    type: 'screening.share', payload: { sessionId: 's', seq: 1, active, ...(includeAudio ? { hasSourceAudio } : {}) },
+  }));
+  assert.equal(parse(true, undefined, false), null);
+  assert.equal(parse(true, 'yes'), null);
+  assert.deepEqual(parse(true, true), { type: 'screening.share', sessionId: 's', seq: 1, active: true, hasSourceAudio: true });
+  assert.deepEqual(parse(true, false), { type: 'screening.share', sessionId: 's', seq: 1, active: true, hasSourceAudio: false });
+  assert.equal(parse(false, true), null);
+  assert.deepEqual(parse(false, undefined, false), { type: 'screening.share', sessionId: 's', seq: 1, active: false, hasSourceAudio: false });
+  assert.deepEqual(parse(false, false), { type: 'screening.share', sessionId: 's', seq: 1, active: false, hasSourceAudio: false });
+});
+
+test('initial share persists source audio and announces it to both members', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  const started = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: true });
+  assert.equal(peer(started.peers, 'a1').hasSourceAudio, true);
+  assert.deepEqual(started.events.map(({ socketId, type, payload }) => ({ socketId, type, payload })), [
+    { socketId: 'a1', type: 'screening.share.changed', payload: { memberId: 'alice', deviceId: 'alice-phone', active: true, hasSourceAudio: true } },
+    { socketId: 'b1', type: 'screening.share.changed', payload: { memberId: 'alice', deviceId: 'alice-phone', active: true, hasSourceAudio: true } },
+  ]);
+});
+
+test('active sharer audio update broadcasts without resetting negotiation', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: true }).peers;
+  peers = command(peers, 'a1', 'screening.signal', 2, {
+    kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' },
+  }).peers;
+  const updated = command(peers, 'a1', 'screening.share', 3, { active: true, hasSourceAudio: false });
+  assert.equal(peer(updated.peers, 'a1').sharer, true);
+  assert.equal(peer(updated.peers, 'a1').hasSourceAudio, false);
+  assert.equal(peer(updated.peers, 'a1').negotiationId, 'n1');
+  assert.deepEqual(updated.events.map(({ socketId, payload }) => ({ socketId, payload })), [
+    { socketId: 'a1', payload: { memberId: 'alice', deviceId: 'alice-phone', active: true, hasSourceAudio: false } },
+    { socketId: 'b1', payload: { memberId: 'alice', deviceId: 'alice-phone', active: true, hasSourceAudio: false } },
+  ]);
+  const unchanged = command(updated.peers, 'a1', 'screening.share', 4, { active: true, hasSourceAudio: false });
+  assert.deepEqual(unchanged.events, []);
+});
+
+test('late join snapshot retains source audio across attachment JSON round-trip', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: true }).peers;
+  peers = JSON.parse(JSON.stringify(peers)); // mimic DO hibernation and attachment reload
+  const newcomer = send(peers, 'b1', 'screening.join', { deviceId: 'bob-tablet', takeover: false });
+  const joinedEvent = newcomer.events.find((event) => event.socketId === 'b1' && event.type === 'screening.joined');
+  assert.deepEqual(joinedEvent.payload.peers, [
+    { memberId: 'alice', deviceId: 'alice-phone', sharer: true, paused: false, micEnabled: false, hasSourceAudio: true },
+  ]);
+});
+
+test('second simultaneous sharer gets no share confirmation or audio state', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: true }).peers;
+  const denied = command(peers, 'b1', 'screening.share', 1, { active: true, hasSourceAudio: true });
+  assert.deepEqual(denied.events, []);
+  assert.equal(peer(denied.peers, 'b1').sharer, false);
+  assert.equal(peer(denied.peers, 'b1').hasSourceAudio, false);
+  assert.equal(peer(denied.peers, 'a1').hasSourceAudio, true);
+});
+
+test('inactive share clears source audio and announces false', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: true }).peers;
+  const stopped = command(peers, 'a1', 'screening.share', 2, { active: false });
+  assert.equal(peer(stopped.peers, 'a1').hasSourceAudio, false);
+  assert.deepEqual(stopped.events.map(({ socketId, payload }) => ({ socketId, payload })), [
+    { socketId: 'a1', payload: { memberId: 'alice', deviceId: 'alice-phone', active: false, hasSourceAudio: false } },
+    { socketId: 'b1', payload: { memberId: 'alice', deviceId: 'alice-phone', active: false, hasSourceAudio: false } },
+  ]);
+});
+
+test('leave and takeover clear source audio and announce share stopped', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: true }).peers;
+  const left = command(peers, 'a1', 'screening.leave', 2);
+  assert.equal(peer(left.peers, 'a1').hasSourceAudio, undefined);
+  assert.deepEqual(left.events.find((event) => event.socketId === 'b1' && event.type === 'screening.share.changed').payload,
+    { memberId: 'alice', deviceId: 'alice-phone', active: false, hasSourceAudio: false });
+
+  peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: true }).peers;
+  const takeover = send(peers, 'a2', 'screening.join', { deviceId: 'alice-laptop', takeover: true });
+  assert.equal(peer(takeover.peers, 'a1').hasSourceAudio, undefined);
+  assert.equal(peer(takeover.peers, 'a2').hasSourceAudio, false);
+  assert.deepEqual(takeover.events.find((event) => event.socketId === 'b1' && event.type === 'screening.share.changed').payload,
+    { memberId: 'alice', deviceId: 'alice-phone', active: false, hasSourceAudio: false });
 });
 
 test('rejects stale sequence and negotiation', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   peers = joined(peers, 'b1', 'bob-tablet');
-  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: false }).peers;
   const offer = command(peers, 'a1', 'screening.signal', 2, { kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' }, actorId: 'mallory' });
   assert.deepEqual(offer.events.filter((event) => event.type === 'screening.signal').map((event) => event.socketId), ['b1']);
   assert.equal(offer.events[0].payload.memberId, 'alice');
@@ -107,7 +203,7 @@ test('rejects stale sequence and negotiation', () => {
 test('64 negotiation IDs stay within the attachment budget and emoji IDs cannot enter history', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   peers = joined(peers, 'b1', 'bob-tablet');
-  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: false }).peers;
   const emojiIds = Array.from({ length: 64 }, (_, index) => '😀'.repeat(63) + String.fromCharCode(65 + index));
   assert.ok(Buffer.byteLength(JSON.stringify({ ...peer(peers, 'a1'), roomId: 'room_0123456789',
     negotiationId: emojiIds.at(-1), usedNegotiationIds: emojiIds })) > 16_384);
@@ -138,7 +234,7 @@ test('64 negotiation IDs stay within the attachment budget and emoji IDs cannot 
 test('does not relay an offer when a peer attachment write fails', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   peers = joined(peers, 'b1', 'bob-tablet');
-  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: false }).peers;
   const result = command(peers, 'a1', 'screening.signal', 2, {
     kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' },
   });
@@ -154,7 +250,7 @@ test('does not relay an offer when a peer attachment write fails', () => {
 test('relays an offer after both peer attachment writes succeed', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   peers = joined(peers, 'b1', 'bob-tablet');
-  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: false }).peers;
   const result = command(peers, 'a1', 'screening.signal', 2, {
     kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' },
   });
@@ -183,7 +279,7 @@ test('rate-limits short danmaku', () => {
 test('requires sharer pause confirmation', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   peers = joined(peers, 'b1', 'bob-tablet');
-  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: false }).peers;
   const requested = command(peers, 'b1', 'screening.pause.request', 1, { paused: true });
   assert.equal(requested.events.some((event) => event.type === 'screening.pause.requested'), true);
   const falseConfirm = command(requested.peers, 'b1', 'screening.pause.confirm', 2, { paused: true });
@@ -198,7 +294,7 @@ test('requires sharer pause confirmation', () => {
 test('leaving the sharer clears confirmed pause and notifies the remaining device', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   peers = joined(peers, 'b1', 'bob-tablet');
-  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true, hasSourceAudio: false }).peers;
   peers = command(peers, 'b1', 'screening.pause.request', 1, { paused: true }).peers;
   peers = command(peers, 'a1', 'screening.pause.confirm', 2, { paused: true }).peers;
   const left = command(peers, 'a1', 'screening.leave', 3);

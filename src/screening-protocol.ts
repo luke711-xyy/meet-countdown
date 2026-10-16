@@ -6,6 +6,7 @@ export type ScreeningPeer = {
   sessionId?: string;
   lastSeq?: number;
   sharer?: boolean;
+  hasSourceAudio?: boolean;
   paused?: boolean;
   pendingPause?: boolean;
   lastDanmakuAt?: number;
@@ -26,7 +27,7 @@ type SignalData = { type: 'offer' | 'answer'; sdp: string } | {
 export type ScreeningCommand =
   | { type: 'screening.join'; deviceId: string; takeover: boolean }
   | ({ type: 'screening.leave' } & Control)
-  | ({ type: 'screening.share'; active: boolean } & Control)
+  | ({ type: 'screening.share'; active: boolean; hasSourceAudio: boolean } & Control)
   | ({ type: 'screening.signal'; kind: SignalKind; negotiationId: string; targetDeviceId: string; data: SignalData } & Control)
   | ({ type: 'screening.mic'; enabled: boolean } & Control)
   | ({ type: 'screening.danmaku'; text: string } & Control)
@@ -156,7 +157,10 @@ export function parseScreeningMessage(raw: string): ScreeningCommand | null {
     switch (input.type) {
       case 'screening.leave': return { type: input.type, ...control };
       case 'screening.share':
-        return typeof payload.active === 'boolean' ? { type: input.type, ...control, active: payload.active } : null;
+        if (typeof payload.active !== 'boolean') return null;
+        if (payload.active && typeof payload.hasSourceAudio !== 'boolean') return null;
+        if (!payload.active && payload.hasSourceAudio !== undefined && payload.hasSourceAudio !== false) return null;
+        return { type: input.type, ...control, active: payload.active, hasSourceAudio: payload.active ? payload.hasSourceAudio as boolean : false };
       case 'screening.mic':
         return typeof payload.enabled === 'boolean' ? { type: input.type, ...control, enabled: payload.enabled } : null;
       case 'screening.danmaku': {
@@ -255,6 +259,7 @@ export function transitionScreening(
     peer.negotiationId = undefined;
     peer.usedNegotiationIds = undefined;
     peer.micEnabled = undefined;
+    peer.hasSourceAudio = undefined;
   };
 
   if (command.type === 'screening.join') {
@@ -273,7 +278,7 @@ export function transitionScreening(
       if (wasSharer) for (const peer of active()) { peer.paused = false; peer.pendingPause = undefined; }
       events.push({ socketId: prior.socketId, type: 'screening.taken-over', payload: { memberId: actor.memberId, deviceId: command.deviceId } });
       for (const peer of active()) events.push({ socketId: peer.socketId, type: 'screening.peer.left', payload: { memberId: actor.memberId, deviceId: priorDeviceId } });
-      if (wasSharer) sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: priorDeviceId, active: false });
+      if (wasSharer) sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: priorDeviceId, active: false, hasSourceAudio: false });
     }
     resetNegotiation();
     actor.deviceId = command.deviceId;
@@ -281,13 +286,14 @@ export function transitionScreening(
     actor.lastSeq = 0;
     actor.usedNegotiationIds = [];
     actor.sharer = false;
+    actor.hasSourceAudio = false;
     actor.paused = false;
     const others = active().filter((peer) => peer !== actor);
     events.push({ socketId: actor.socketId, type: 'screening.joined', payload: {
       sessionId: actor.sessionId,
       memberId: actor.memberId,
       deviceId: actor.deviceId,
-      peers: others.map((peer) => ({ memberId: peer.memberId, deviceId: peer.deviceId, sharer: peer.sharer === true, paused: peer.paused === true, micEnabled: peer.micEnabled === true })),
+      peers: others.map((peer) => ({ memberId: peer.memberId, deviceId: peer.deviceId, sharer: peer.sharer === true, paused: peer.paused === true, micEnabled: peer.micEnabled === true, hasSourceAudio: peer.sharer === true && peer.hasSourceAudio === true })),
     } });
     for (const peer of others) events.push({ socketId: peer.socketId, type: 'screening.peer.joined', payload: { memberId: actor.memberId, deviceId: actor.deviceId } });
     return result;
@@ -302,22 +308,30 @@ export function transitionScreening(
     resetNegotiation();
     if (wasSharer) for (const peer of active()) { peer.paused = false; peer.pendingPause = undefined; }
     sendActive('screening.peer.left', { memberId: actor.memberId, deviceId });
-    if (wasSharer) sendActive('screening.share.changed', { memberId: actor.memberId, deviceId, active: false });
+    if (wasSharer) sendActive('screening.share.changed', { memberId: actor.memberId, deviceId, active: false, hasSourceAudio: false });
     return result;
   }
 
   if (command.type === 'screening.share') {
     if (command.active) {
-      if (actor.sharer || active().some((peer) => peer.sharer)) return result;
+      if (actor.sharer) {
+        if (actor.hasSourceAudio === command.hasSourceAudio) return result;
+        actor.hasSourceAudio = command.hasSourceAudio;
+        sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: actor.deviceId, active: true, hasSourceAudio: command.hasSourceAudio });
+        return result;
+      }
+      if (active().some((peer) => peer.sharer)) return result;
       actor.sharer = true;
+      actor.hasSourceAudio = command.hasSourceAudio;
       for (const peer of active()) { peer.paused = false; peer.pendingPause = undefined; }
     } else {
       if (!actor.sharer) return result;
       actor.sharer = false;
+      actor.hasSourceAudio = false;
       for (const peer of active()) { peer.paused = false; peer.pendingPause = undefined; }
     }
     resetNegotiation();
-    sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: actor.deviceId, active: command.active });
+    sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: actor.deviceId, active: command.active, hasSourceAudio: actor.hasSourceAudio === true });
     return result;
   }
 
