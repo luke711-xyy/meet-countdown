@@ -53,7 +53,9 @@
             <p class="brand-name">见面倒计时</p>
           </div>
         </div>
-        <div class="topbar-actions"><span class="account-name" id="account-name"></span><button class="icon-button" id="open-settings" type="button" aria-label="打开设置" title="设置">
+        <div class="topbar-actions"><span class="account-name" id="account-name"></span><button class="icon-button" id="open-screening" type="button" aria-label="进入放映室" title="进入放映室">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="13" rx="2"/><path d="M8 21h8M12 18v3"/></svg>
+        </button><button class="icon-button" id="open-settings" type="button" aria-label="打开设置" title="设置">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
         </button></div>
       </header>
@@ -82,6 +84,32 @@
         <span id="timezone-label">本地时间</span>
       </footer>
     </main>
+
+    <section class="screening-room" id="screening-room" role="dialog" aria-modal="true" aria-labelledby="screening-title" hidden>
+      <div class="screening-shell">
+        <header class="screening-heading">
+          <div><h2 id="screening-title">放映室</h2><p id="screening-person" class="screening-person"></p></div>
+          <button class="screening-orb" id="screening-close" type="button" aria-label="离开放映室" title="离开放映室"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg></button>
+        </header>
+        <div class="screening-stage" id="screening-stage">
+          <video id="screening-video" autoplay playsinline aria-label="对方共享的画面"></video>
+          <div class="screening-empty" id="screening-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="13" rx="2"/><path d="M8 21h8M12 18v3"/></svg><span>等待共享画面</span></div>
+          <div class="screening-danmaku" id="screening-danmaku" aria-hidden="true"></div>
+          <button class="screening-audio-action" id="screening-enable-audio" type="button" hidden>开启声音</button>
+        </div>
+        <div class="screening-bottom">
+          <p class="screening-status" id="screening-status" role="status" aria-live="polite">等待加入放映室</p>
+          <button class="screening-takeover" id="screening-takeover" type="button" hidden>在此设备接管</button>
+          <div class="screening-confirm-row" id="screening-confirm-row" hidden><span id="screening-confirm-text">请在播放器中暂停</span><button type="button" id="screening-confirm">已暂停</button></div>
+          <div class="screening-controls" role="group" aria-label="放映控制">
+            <button class="screening-orb" id="screening-mic" type="button" aria-label="开启麦克风" aria-pressed="false" title="麦克风"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg></button>
+            <form class="screening-message" id="screening-danmaku-form"><label class="sr-only" for="screening-danmaku-input">发送弹幕</label><input id="screening-danmaku-input" type="text" maxlength="80" placeholder="发一条弹幕" autocomplete="off"/><button type="submit" aria-label="发送弹幕">发送</button></form>
+            <button class="screening-orb" id="screening-pause" type="button" aria-label="请求暂停" title="暂停或继续"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg></button>
+            <button class="screening-orb" id="screening-share" type="button" aria-label="共享画面" title="共享画面"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="13" rx="2"/><path d="M12 15V8m-3 3 3-3 3 3"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <aside class="edge-rail edge-rail-left" id="voice-rail" aria-label="留言">
       <div class="edge-capsules" id="voice-capsules" aria-live="polite"></div>
