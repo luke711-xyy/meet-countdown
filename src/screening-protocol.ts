@@ -317,7 +317,7 @@ export function transitionScreening(
       if (actor.sharer) {
         if (actor.hasSourceAudio === command.hasSourceAudio) return result;
         actor.hasSourceAudio = command.hasSourceAudio;
-        sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: actor.deviceId, active: true, hasSourceAudio: command.hasSourceAudio });
+        sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: actor.deviceId, active: true, hasSourceAudio: command.hasSourceAudio, requestSeq: command.seq });
         return result;
       }
       if (active().some((peer) => peer.sharer)) return result;
@@ -331,7 +331,7 @@ export function transitionScreening(
       for (const peer of active()) { peer.paused = false; peer.pendingPause = undefined; }
     }
     resetNegotiation();
-    sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: actor.deviceId, active: command.active, hasSourceAudio: actor.hasSourceAudio === true });
+    sendActive('screening.share.changed', { memberId: actor.memberId, deviceId: actor.deviceId, active: command.active, hasSourceAudio: actor.hasSourceAudio === true, requestSeq: command.seq });
     return result;
   }
 
