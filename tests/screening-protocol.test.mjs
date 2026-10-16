@@ -104,6 +104,71 @@ test('rejects stale sequence and negotiation', () => {
   assert.deepEqual(oldSession.events, []);
 });
 
+test('64 negotiation IDs stay within the attachment budget and emoji IDs cannot enter history', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  const emojiIds = Array.from({ length: 64 }, (_, index) => '😀'.repeat(63) + String.fromCharCode(65 + index));
+  assert.ok(Buffer.byteLength(JSON.stringify({ ...peer(peers, 'a1'), roomId: 'room_0123456789',
+    negotiationId: emojiIds.at(-1), usedNegotiationIds: emojiIds })) > 16_384);
+  let acceptedEmojiIds = 0;
+  for (let index = 0; index < 64; index++) {
+    const negotiationId = emojiIds[index];
+    const parsed = parseScreeningMessage(JSON.stringify({ type: 'screening.signal', payload: {
+      sessionId: peer(peers, 'a1').sessionId, seq: index + 2, kind: 'offer', negotiationId,
+      targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' },
+    } }));
+    if (!parsed) continue;
+    acceptedEmojiIds++;
+    peers = transitionScreening(peers, 'a1', parsed, 1000, session).peers;
+  }
+  assert.equal(acceptedEmojiIds, 0);
+  assert.ok(Buffer.byteLength(JSON.stringify({ ...peer(peers, 'a1'), roomId: 'room_0123456789' })) < 16_384);
+
+  for (let index = 0; index < 64; index++) {
+    const negotiationId = `${String(index).padStart(2, '0')}${'a'.repeat(62)}`;
+    peers = command(peers, 'a1', 'screening.signal', index + 2, {
+      kind: 'offer', negotiationId, targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' },
+    }).peers;
+  }
+  assert.equal(peer(peers, 'a1').usedNegotiationIds.length, 64);
+  assert.ok(Buffer.byteLength(JSON.stringify({ ...peer(peers, 'a1'), roomId: 'room_0123456789' })) < 16_384);
+});
+
+test('does not relay an offer when a peer attachment write fails', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  const result = command(peers, 'a1', 'screening.signal', 2, {
+    kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' },
+  });
+  const sent = [];
+  const byId = new Map([
+    ['a1', { attachment: peer(peers, 'a1'), socket: { serializeAttachment() {}, send(message) { sent.push(message); } } }],
+    ['b1', { attachment: peer(peers, 'b1'), socket: { serializeAttachment() { throw new Error('attachment too large'); }, send(message) { sent.push(message); } } }],
+  ]);
+  assert.equal(screeningProtocol.applyScreeningTransition(result, byId, (event) => event.type), false);
+  assert.deepEqual(sent, []);
+});
+
+test('relays an offer after both peer attachment writes succeed', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.share', 1, { active: true }).peers;
+  const result = command(peers, 'a1', 'screening.signal', 2, {
+    kind: 'offer', negotiationId: 'n1', targetDeviceId: 'bob-tablet', data: { type: 'offer', sdp: 'v=0' },
+  });
+  const sent = [];
+  const writes = [];
+  const byId = new Map(['a1', 'b1'].map((socketId) => [socketId, {
+    attachment: peer(peers, socketId),
+    socket: { serializeAttachment(next) { writes.push({ socketId, next }); }, send(message) { sent.push({ socketId, message }); } },
+  }]));
+  assert.equal(screeningProtocol.applyScreeningTransition(result, byId, (event) => event.type), true);
+  assert.deepEqual(writes.map(({ socketId }) => socketId), ['a1', 'b1']);
+  assert.deepEqual(sent, [{ socketId: 'b1', message: 'screening.signal' }]);
+});
+
 test('rate-limits short danmaku', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   const first = command(peers, 'a1', 'screening.danmaku', 1, { text: '  hello  ' }, 1000);

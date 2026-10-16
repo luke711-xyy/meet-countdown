@@ -42,6 +42,8 @@ const MAX_USED_NEGOTIATIONS = 64;
 const MAX_DANMAKU_CHARS = 80;
 const DANMAKU_INTERVAL_MS = 1_000;
 const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 128;
+// Negotiation IDs are retained in attachments; constrain their encoded size as well as history length.
+const negotiationId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -167,7 +169,7 @@ export function parseScreeningMessage(raw: string): ScreeningCommand | null {
         return typeof payload.paused === 'boolean' ? { type: input.type, ...control, paused: payload.paused } : null;
       case 'screening.signal': {
         const kind = payload.kind;
-        if ((kind !== 'offer' && kind !== 'answer' && kind !== 'ice') || !id(payload.negotiationId) || !id(payload.targetDeviceId) || !object(payload.data)) return null;
+        if ((kind !== 'offer' && kind !== 'answer' && kind !== 'ice') || !negotiationId(payload.negotiationId) || !id(payload.targetDeviceId) || !object(payload.data)) return null;
         let data: SignalData;
         if (kind === 'offer' || kind === 'answer') {
           if (payload.data.type !== kind || typeof payload.data.sdp !== 'string' || !payload.data.sdp) return null;
@@ -190,6 +192,37 @@ export function parseScreeningMessage(raw: string): ScreeningCommand | null {
   } catch {
     return null;
   }
+}
+
+type ScreeningSocket = {
+  serializeAttachment(attachment: Record<string, unknown>): void;
+  send(message: string): void;
+};
+
+/** Persist the transition before delivering events; a failed attachment write must not relay an offer. */
+export function applyScreeningTransition(
+  result: ScreeningTransition,
+  byId: Map<string, { socket: ScreeningSocket; attachment: Record<string, unknown> }>,
+  encodeEvent: (event: ScreeningTransition['events'][number]) => string,
+): boolean {
+  try {
+    for (const peer of result.peers) {
+      const entry = byId.get(peer.socketId);
+      if (!entry) continue;
+      const nextAttachment = { ...entry.attachment, ...peer };
+      if (JSON.stringify(entry.attachment) !== JSON.stringify(nextAttachment)) {
+        entry.socket.serializeAttachment(nextAttachment);
+      }
+    }
+  } catch {
+    return false;
+  }
+  for (const event of result.events) {
+    const socket = byId.get(event.socketId)?.socket;
+    if (!socket) continue;
+    try { socket.send(encodeEvent(event)); } catch { /* disconnected sockets are cleaned by the runtime */ }
+  }
+  return true;
 }
 
 export function transitionScreening(

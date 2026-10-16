@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { parseScreeningMessage, shouldRejectOversizedRealtimeMessage, transitionScreening, type ScreeningPeer, type ScreeningTransition } from './screening-protocol.ts';
+import { applyScreeningTransition, parseScreeningMessage, shouldRejectOversizedRealtimeMessage, transitionScreening, type ScreeningPeer, type ScreeningTransition } from './screening-protocol.ts';
 
 export interface Env {
   ASSETS: Fetcher;
@@ -774,20 +774,8 @@ export class CoupleRoom extends DurableObject<Env> {
   }
 
   private applyScreening(result: ScreeningTransition, byId: Map<string, { socket: WebSocket; attachment: Record<string, unknown> }>) {
-    for (const peer of result.peers) {
-      const entry = byId.get(peer.socketId);
-      if (!entry) continue;
-      const nextAttachment = { ...entry.attachment, ...peer };
-      if (JSON.stringify(entry.attachment) !== JSON.stringify(nextAttachment)) {
-        try { entry.socket.serializeAttachment(nextAttachment); } catch { /* socket may already be closed */ }
-      }
-    }
-    for (const event of result.events) {
-      const socket = byId.get(event.socketId)?.socket;
-      if (!socket) continue;
-      try { socket.send(JSON.stringify({ type: event.type, payload: event.payload, createdAt: nowIso() })); }
-      catch { /* disconnected sockets are cleaned by the runtime */ }
-    }
+    applyScreeningTransition(result, byId, (event) =>
+      JSON.stringify({ type: event.type, payload: event.payload, createdAt: nowIso() }));
   }
 
   private leaveScreening(socket: WebSocket) {
@@ -799,6 +787,7 @@ export class CoupleRoom extends DurableObject<Env> {
     const result = transitionScreening(peers, attachment.socketId, {
       type: 'screening.leave', sessionId: attachment.sessionId, seq: (attachment.lastSeq ?? 0) + 1,
     }, Date.now(), () => crypto.randomUUID());
+    byId.delete(attachment.socketId); // Closed socket cannot persist; remaining peers still can.
     this.applyScreening(result, byId);
   }
 
