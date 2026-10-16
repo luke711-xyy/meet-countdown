@@ -2,6 +2,7 @@ data/*.sqlite
 .playwright-cli/
 output/playwright/
 node_modules/
+.worktrees/
 output/
 .wrangler/
 .dev.vars
