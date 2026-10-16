@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { parseScreeningMessage, transitionScreening, type ScreeningPeer, type ScreeningTransition } from './screening-protocol.ts';
 
 export interface Env {
   ASSETS: Fetcher;
@@ -729,6 +730,8 @@ export default {
 };
 
 export class CoupleRoom extends DurableObject<Env> {
+  private disconnectedScreeningSockets = new WeakSet<WebSocket>();
+
   async fetch(request: Request) {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
     const pair = new WebSocketPair();
@@ -739,7 +742,7 @@ export class CoupleRoom extends DurableObject<Env> {
     const memberId = request.headers.get('X-Member-Id') || '';
     if (!memberId) return new Response('Unauthorized', { status: 401 });
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ roomId, memberId });
+    server.serializeAttachment({ roomId, memberId, socketId: crypto.randomUUID() });
     server.send(JSON.stringify({ type: 'room.ready', payload: { roomId, memberId }, createdAt: nowIso() }));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -751,10 +754,67 @@ export class CoupleRoom extends DurableObject<Env> {
     }
   }
 
+  private screeningSockets(extraSocket?: WebSocket) {
+    const sockets = [...this.ctx.getWebSockets()];
+    if (extraSocket && !sockets.includes(extraSocket)) sockets.push(extraSocket);
+    const byId = new Map<string, { socket: WebSocket; attachment: Record<string, unknown> }>();
+    const peers: ScreeningPeer[] = [];
+    for (const socket of sockets) {
+      const attachment = socket.deserializeAttachment() as Record<string, unknown> | null;
+      if (!attachment || typeof attachment.memberId !== 'string' || !attachment.memberId) continue;
+      const socketId = typeof attachment.socketId === 'string' && attachment.socketId ? attachment.socketId : crypto.randomUUID();
+      if (attachment.socketId !== socketId) {
+        attachment.socketId = socketId;
+        socket.serializeAttachment(attachment);
+      }
+      byId.set(socketId, { socket, attachment });
+      peers.push({ ...attachment, socketId, memberId: attachment.memberId } as ScreeningPeer);
+    }
+    return { peers, byId };
+  }
+
+  private applyScreening(result: ScreeningTransition, byId: Map<string, { socket: WebSocket; attachment: Record<string, unknown> }>) {
+    for (const peer of result.peers) {
+      const entry = byId.get(peer.socketId);
+      if (!entry) continue;
+      const nextAttachment = { ...entry.attachment, ...peer };
+      if (JSON.stringify(entry.attachment) !== JSON.stringify(nextAttachment)) {
+        try { entry.socket.serializeAttachment(nextAttachment); } catch { /* socket may already be closed */ }
+      }
+    }
+    for (const event of result.events) {
+      const socket = byId.get(event.socketId)?.socket;
+      if (!socket) continue;
+      try { socket.send(JSON.stringify({ type: event.type, payload: event.payload, createdAt: nowIso() })); }
+      catch { /* disconnected sockets are cleaned by the runtime */ }
+    }
+  }
+
+  private leaveScreening(socket: WebSocket) {
+    if (this.disconnectedScreeningSockets.has(socket)) return;
+    this.disconnectedScreeningSockets.add(socket);
+    const { peers, byId } = this.screeningSockets(socket);
+    const attachment = socket.deserializeAttachment() as ScreeningPeer | null;
+    if (!attachment?.sessionId || !attachment.socketId) return;
+    const result = transitionScreening(peers, attachment.socketId, {
+      type: 'screening.leave', sessionId: attachment.sessionId, seq: (attachment.lastSeq ?? 0) + 1,
+    }, Date.now(), () => crypto.randomUUID());
+    this.applyScreening(result, byId);
+  }
+
   webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
     if (typeof message !== 'string') return;
     try {
       const input = JSON.parse(message) as { type?: string; payload?: Record<string, unknown> };
+      if (typeof input?.type === 'string' && input.type.startsWith('screening.')) {
+        const command = parseScreeningMessage(message);
+        if (!command) return;
+        const { peers, byId } = this.screeningSockets(socket);
+        const attachment = socket.deserializeAttachment() as ScreeningPeer | null;
+        if (!attachment?.socketId) return;
+        this.applyScreening(transitionScreening(peers, attachment.socketId, command, Date.now(), () => crypto.randomUUID()), byId);
+        return;
+      }
       if (input.type === 'doodle.preview' && input.payload) {
         const payload = input.payload;
         const id = String(payload.id || '');
@@ -794,6 +854,6 @@ export class CoupleRoom extends DurableObject<Env> {
     }
   }
 
-  webSocketClose() {}
-  webSocketError() {}
+  webSocketClose(socket: WebSocket) { this.leaveScreening(socket); }
+  webSocketError(socket: WebSocket) { this.leaveScreening(socket); }
 }

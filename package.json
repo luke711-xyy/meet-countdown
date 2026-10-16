@@ -8,6 +8,7 @@
     "start": "node --no-warnings server.mjs",
     "dev": "node --watch --no-warnings server.mjs",
     "dev:cloudflare": "wrangler dev --local --port 8787",
+    "test": "node --experimental-strip-types --test tests/screening-*.test.mjs",
     "types": "wrangler types src/worker-configuration.d.ts",
     "deploy:dry": "wrangler deploy --dry-run",
     "deploy": "wrangler deploy --minify"
