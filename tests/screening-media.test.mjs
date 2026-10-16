@@ -77,7 +77,7 @@ class FakePeer {
 }
 
 function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height: 1080 })], displayError, signalError = false,
-  peerClass = FakePeer, onShareChangeOverride } = {}) {
+  peerClass = FakePeer, onShareChangeOverride, sendSignalOverride } = {}) {
   FakePeer.instances = [];
   const shareChanges = [];
   const micChanges = [];
@@ -103,7 +103,7 @@ function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height:
   };
   const session = createScreeningMedia({
     mediaDevices, PeerConnection: peerClass,
-    sendSignal: (signal) => { if (rejectSignals) throw new Error('peer not joined'); signals.push(signal); },
+    sendSignal: (signal) => { if (rejectSignals) throw new Error('peer not joined'); signals.push(signal); return sendSignalOverride?.(signal); },
     onShareChange: (value) => { shareChanges.push(value); return onShareChangeOverride?.(value); },
     onMicChange: (value) => micChanges.push(value),
     onStatus: (value) => statuses.push(value),
@@ -466,6 +466,70 @@ test('new sharer offer resets viewer failure wait and connection cancels it', as
     assert.equal(newTimer.cancelled, true);
     newTimer.fn();
     assert.equal(ctx.statuses.at(-1).state, 'connected');
+  } finally {
+    ctx.session.close();
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
+test('viewer recovery deadline survives a never-settling replacement answer send', async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = (fn, delay) => { const timer = { fn, delay, cancelled: false }; timers.push(timer); return timer; };
+  globalThis.clearTimeout = (timer) => { timer.cancelled = true; };
+  const neverSettles = new Promise(() => {});
+  const ctx = harness({ sendSignalOverride: (signal) => signal.kind === 'answer' && signal.negotiationId === 'n2' ? neverSettles : undefined });
+  try {
+    await ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n1', data: { type: 'offer', sdp: 'remote' } });
+    const peer = ctx.peer;
+    peer.iceConnectionState = 'failed';
+    peer.oniceconnectionstatechange();
+    const oldTimer = timers.find((item) => !item.cancelled);
+    const handling = ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n2', data: { type: 'offer', sdp: 'restart' } });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(ctx.signals.some((signal) => signal.kind === 'answer' && signal.negotiationId === 'n2'));
+    assert.equal(oldTimer.cancelled, true);
+    const deadline = timers.find((item) => !item.cancelled);
+    assert.ok(deadline, 'replacement answer is pending but viewer still has a deadline');
+    assert.ok(deadline.delay > 0 && deadline.delay <= 15_000);
+    deadline.fn();
+    assert.equal(ctx.statuses.at(-1).state, 'direct-failed');
+    void handling;
+  } finally {
+    ctx.session.close();
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
+test('connection during replacement answer send cancels the viewer deadline', async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = (fn, delay) => { const timer = { fn, delay, cancelled: false }; timers.push(timer); return timer; };
+  globalThis.clearTimeout = (timer) => { timer.cancelled = true; };
+  let releaseAnswer;
+  const pendingAnswer = new Promise((resolve) => { releaseAnswer = resolve; });
+  const ctx = harness({ sendSignalOverride: (signal) => signal.kind === 'answer' && signal.negotiationId === 'n2' ? pendingAnswer : undefined });
+  try {
+    await ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n1', data: { type: 'offer', sdp: 'remote' } });
+    const peer = ctx.peer;
+    peer.iceConnectionState = 'failed';
+    peer.oniceconnectionstatechange();
+    const handling = ctx.session.handleSignal({ kind: 'offer', negotiationId: 'n2', data: { type: 'offer', sdp: 'restart' } });
+    await new Promise((resolve) => setImmediate(resolve));
+    const deadline = timers.find((item) => !item.cancelled);
+    assert.ok(deadline, 'deadline stays active while answer send is pending');
+    peer.iceConnectionState = 'connected';
+    peer.oniceconnectionstatechange();
+    assert.equal(deadline.cancelled, true);
+    releaseAnswer();
+    assert.equal(await handling, true);
+    deadline.fn();
+    assert.equal(ctx.statuses.at(-1).state, 'connected');
+    assert.equal(ctx.statuses.some((value) => value.state === 'direct-failed'), false);
   } finally {
     ctx.session.close();
     globalThis.setTimeout = realSetTimeout;

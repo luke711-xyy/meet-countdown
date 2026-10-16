@@ -478,35 +478,31 @@ export function createScreeningMedia({
       if (incomingId === negotiationId) return false;
       const current = ensurePeer();
       const recovering = viewerRecoveryPending || current.iceConnectionState === 'failed' || current.iceConnectionState === 'disconnected';
-      clearDisconnectTimer();
-      viewerRecoveryPending = false;
       failureReported = false;
       negotiationId = incomingId;
+      if (recovering) waitForViewerRecovery(current, incomingId, false);
+      else {
+        clearDisconnectTimer();
+        viewerRecoveryPending = false;
+      }
       remoteDescriptionReady = false;
       pendingRemoteIce = [];
       pendingLocalIce = [];
       sendingDescription = true;
       try {
         await current.setRemoteDescription({ type: 'offer', sdp: withoutRelayCandidates(data.sdp) });
-        if (peer !== current || negotiationId !== incomingId || closed) return false;
+        if (peer !== current || negotiationId !== incomingId || closed || failureReported) return false;
         remoteDescriptionReady = true;
         await flushRemoteIce(current, incomingId);
         const answer = await current.createAnswer();
+        if (peer !== current || negotiationId !== incomingId || closed || failureReported) return false;
         await current.setLocalDescription(answer);
-        if (peer !== current || negotiationId !== incomingId || closed) return false;
+        if (peer !== current || negotiationId !== incomingId || closed || failureReported) return false;
         await sendSignal({ kind: 'answer', negotiationId: incomingId, data: { type: 'answer', sdp: current.localDescription.sdp } });
+        if (peer !== current || negotiationId !== incomingId || closed || failureReported) return false;
         sendingDescription = false;
         await flushLocalIce(incomingId);
-        if (recovering && current.iceConnectionState !== 'connected' && current.iceConnectionState !== 'completed') {
-          waitForViewerRecovery(current, incomingId, false);
-        }
-        return true;
-      } catch (error) {
-        if (recovering && peer === current && !closed &&
-            current.iceConnectionState !== 'connected' && current.iceConnectionState !== 'completed') {
-          waitForViewerRecovery(current, incomingId, false);
-        }
-        throw error;
+        return peer === current && negotiationId === incomingId && !closed && !failureReported;
       } finally {
         sendingDescription = false;
       }
