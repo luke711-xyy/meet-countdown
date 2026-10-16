@@ -180,22 +180,27 @@ button { cursor: pointer; }
 .screening-person { min-height: 1.3em; margin: 3px 0 0; color: var(--ink-soft); font-size: 11px; }
 .screening-stage { position: relative; display: grid; flex: 1; min-height: 0; overflow: hidden; place-items: center; border-radius: 12px; background: oklch(0.075 0.01 220); }
 .screening-stage video { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; background: oklch(0.075 0.01 220); }
-.screening-empty { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 10px; color: oklch(0.87 0.01 220); font-size: 12px; pointer-events: none; }
+.screening-empty { position: absolute; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 10px; color: oklch(0.87 0.01 220); font-size: 12px; pointer-events: none; }
 .screening-empty svg { width: 36px; height: 36px; fill: none; stroke: currentColor; stroke-width: 1.1; }
-.screening-danmaku { position: absolute; inset: 0 0 32%; overflow: hidden; pointer-events: none; }
+.screening-danmaku { position: absolute; inset: 0 0 32%; pointer-events: none; }
 .screening-danmaku-item { position: absolute; right: -2%; max-width: min(65%, 28rem); overflow: hidden; padding: 4px 9px; border-radius: 999px; color: white; background: oklch(0.08 0.02 220 / 0.7); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; animation: screening-float 7s linear both; }
 @keyframes screening-float { from { transform: translateX(105%); } to { transform: translateX(calc(-100vw - 100%)); } }
-.screening-audio-action { position: absolute; bottom: 18px; left: 50%; padding: 9px 16px; border: 1px solid oklch(1 0 0 / 0.35); border-radius: 999px; color: white; background: oklch(0.1 0.02 220 / 0.78); transform: translateX(-50%); }
+.screening-audio-action { position: absolute; z-index: 3; bottom: 18px; left: 50%; padding: 9px 16px; border: 1px solid oklch(1 0 0 / 0.35); border-radius: 999px; color: white; background: oklch(0.1 0.02 220 / 0.78); transform: translateX(-50%); }
 .screening-bottom { flex: none; padding-top: 10px; }
 .screening-status { min-height: 1.5em; margin: 0 0 9px; color: var(--ink); font-size: 12px; text-align: center; }
+.screening-audio-indicator { width: fit-content; margin: 0 auto 9px; padding: 5px 12px; border: 1px solid oklch(0.58 0.13 55 / 0.55); border-radius: 999px; color: var(--ink); background: oklch(0.78 0.11 75 / 0.24); font-size: 11px; text-align: center; }
 .screening-takeover { display: block; margin: 0 auto 9px; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--ink); background: var(--surface); font-size: 12px; }
 .screening-confirm-row { display: flex; justify-content: center; align-items: center; gap: 12px; margin: 0 0 9px; font-size: 12px; }
 .screening-confirm-row button { padding: 5px 12px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--ink); background: var(--surface); }
-.screening-controls { display: flex; align-items: center; justify-content: center; gap: clamp(8px, 1.5vw, 16px); min-height: 46px; }
+.screening-controls { display: flex; align-items: center; justify-content: center; gap: clamp(8px, 1.5vw, 16px); min-height: 46px; opacity: 1; transition: opacity 240ms ease; }
+.screening-room.is-idle:not(:focus-within) .screening-controls { opacity: 0.34; }
+.screening-room.is-idle .screening-controls:hover { opacity: 1; }
 .screening-orb { display: grid; flex: none; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--ink); background: var(--surface); transition: background 180ms var(--ease-out), transform 180ms var(--ease-out); }
 .screening-orb svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.4; }
 .screening-orb:hover, .screening-orb[aria-pressed="true"] { background: var(--surface-strong); transform: translateY(-1px); }
 .screening-orb:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+.screening-leave { margin-left: clamp(4px, 1vw, 12px); border-color: oklch(0.55 0.08 28 / 0.42); }
+.screening-leave:hover { border-color: oklch(0.55 0.12 28 / 0.8); }
 .screening-message { display: flex; align-items: center; width: min(290px, 42vw); min-width: 0; height: 42px; padding: 3px 4px 3px 13px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); }
 .screening-message input { flex: 1; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 12px; }
 .screening-message input::placeholder { color: var(--ink-soft); }

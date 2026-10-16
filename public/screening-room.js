@@ -3,6 +3,8 @@ import { createScreeningMedia } from './screening-media.js';
 const MAX_DANMAKU = 6;
 const DANMAKU_INTERVAL_MS = 1000;
 const MAX_VIEWER_REJOINS = 1;
+const SHARE_ACK_TIMEOUT_MS = 8000;
+const CONTROLS_IDLE_MS = 5000;
 let fallbackDevice = 0;
 
 function deviceId() {
@@ -19,6 +21,7 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   const ui = {
     close: el('screening-close'), person: el('screening-person'), video: el('screening-video'),
     empty: el('screening-empty'), status: el('screening-status'), audio: el('screening-enable-audio'),
+    audioIndicator: el('screening-audio-indicator'),
     mic: el('screening-mic'), share: el('screening-share'), pause: el('screening-pause'),
     messageForm: el('screening-danmaku-form'), message: el('screening-danmaku-input'),
     danmaku: el('screening-danmaku'), confirmRow: el('screening-confirm-row'),
@@ -40,6 +43,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   let paused = false;
   let pendingPause = null;
   let sourceAudioMissing = false;
+  let pendingShare = null;
+  let abandonedShare = false;
+  let idleTimer = null;
   let micStatusExpected = false;
   let viewerRejoins = 0;
   let rejoining = false;
@@ -49,8 +55,24 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   let inertState = [];
 
   function status(message) {
-    ui.status.textContent = sourceAudioMissing && !message.includes('未共享影片声音')
-      ? `未共享影片声音 · ${message}` : message;
+    ui.status.textContent = message;
+  }
+
+  function rejectPendingShare(message) {
+    if (!pendingShare) return;
+    const pending = pendingShare;
+    pendingShare = null;
+    win.clearTimeout(pending.timer);
+    abandonedShare = true;
+    pending.reject(new Error(message));
+    render();
+  }
+
+  function wakeControls() {
+    if (!opened) return;
+    root.classList.remove('is-idle');
+    if (idleTimer !== null) win.clearTimeout(idleTimer);
+    idleTimer = win.setTimeout(() => { idleTimer = null; root.classList.add('is-idle'); }, CONTROLS_IDLE_MS);
   }
 
   function context() { return getContext() || {}; }
@@ -87,6 +109,11 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     ui.message.disabled = !sessionId;
     ui.messageForm.querySelector('button').disabled = !sessionId;
     ui.person.textContent = sharerId ? `${peerName(sharerId)}正在共享` : peer ? `${peerName(peer.memberId)}已加入` : '';
+    ui.audioIndicator.hidden = !sharerId || !sourceAudioMissing;
+    ui.empty.querySelector('span').textContent = pendingShare ? '正在等待服务器确认共享…'
+      : sharingBusy && !isSharer ? '正在准备共享…'
+        : isSharer ? '你正在共享画面'
+          : sharerId ? '正在连接对方画面…' : '等待共享画面';
     ui.confirmRow.hidden = pendingPause === null || !isSharer;
     if (pendingPause !== null) {
       ui.confirmText.textContent = pendingPause ? '请在播放器中暂停' : '请在播放器中继续';
@@ -104,17 +131,46 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
       },
       onShareChange: async ({ active, hasSourceAudio }) => {
         if (!opened || !sessionId) return;
-        try { await command('screening.share', { active }); }
-        catch (error) {
-          if (active) throw error;
-          status('停止共享通知失败');
+        if (active && isSharer) {
+          sourceAudioMissing = !hasSourceAudio;
+          render();
+          try { await command('screening.share', { active: true, hasSourceAudio: Boolean(hasSourceAudio) }); }
+          catch { status('影片声音状态发送失败'); }
+          return;
         }
-        isSharer = active;
-        sharerId = active ? context().memberId : null;
-        sourceAudioMissing = active && !hasSourceAudio;
-        if (!active) { paused = false; pendingPause = null; }
-        status(active ? '正在共享画面' : '等待共享画面');
-        render();
+        if (active) {
+          if (pendingShare) return pendingShare.promise;
+          abandonedShare = false;
+          const pending = {};
+          pending.promise = new Promise((resolve, reject) => { pending.resolve = resolve; pending.reject = reject; });
+          pending.timer = win.setTimeout(() => {
+            if (pendingShare !== pending) return;
+            rejectPendingShare('共享确认超时');
+            try { void command('screening.share', { active: false, hasSourceAudio: false }).catch(() => {}); } catch { /* Session may have closed. */ }
+            status('共享确认超时，请重试');
+          }, SHARE_ACK_TIMEOUT_MS);
+          pendingShare = pending;
+          sourceAudioMissing = !hasSourceAudio;
+          status('等待服务器确认共享…');
+          render();
+          try {
+            void command('screening.share', { active: true, hasSourceAudio: Boolean(hasSourceAudio) })
+              .catch((error) => { if (pendingShare === pending) rejectPendingShare(error.message); });
+          } catch (error) { rejectPendingShare(error.message); }
+          return pending.promise;
+        }
+        rejectPendingShare('共享已停止');
+        if (isSharer) {
+          isSharer = false;
+          sharerId = null;
+          sourceAudioMissing = false;
+          paused = false;
+          pendingPause = null;
+          status('等待共享画面');
+          render();
+        }
+        try { await command('screening.share', { active: false, hasSourceAudio: false }); }
+        catch { status('停止共享通知失败'); }
       },
       onMicChange: async (enabled) => {
         if (!opened || !sessionId) return;
@@ -128,6 +184,7 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
       onRemoteStream: (stream) => {
         if (!opened) return;
         ui.video.srcObject = stream;
+        ui.video.hidden = !stream;
         ui.empty.hidden = Boolean(stream);
         if (!stream) { ui.audio.hidden = true; return; }
         try {
@@ -142,7 +199,7 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
       },
       onStatus: ({ state }) => {
         if (!opened) return;
-        if (state === 'no-source-audio') { sourceAudioMissing = true; status('未共享影片声音'); }
+        if (state === 'no-source-audio') { sourceAudioMissing = true; status('未共享影片声音'); render(); }
         else if (state === 'direct-failed') status('当前网络直连失败，请换网络后重新加入');
         else if (state === 'needs-sharer-renegotiation') {
           status('等待分享者重新连接');
@@ -193,6 +250,7 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     for (const [node] of inertState) node.inert = true;
     doc.documentElement.classList.add('screening-is-open');
     ui.close.focus();
+    wakeControls();
     onOpenChange(true);
     mediaSession();
     try { await join(); }
@@ -203,6 +261,10 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
 
   function close({ notify = true } = {}) {
     if (!opened) return;
+    rejectPendingShare('已离开放映室');
+    if (idleTimer !== null) win.clearTimeout(idleTimer);
+    idleTimer = null;
+    root.classList.remove('is-idle');
     if (notify && sessionId && socketReady) {
       try { void command('screening.leave').catch(() => {}); } catch { /* Socket may have closed. */ }
     }
@@ -217,12 +279,14 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     paused = false;
     pendingPause = null;
     sourceAudioMissing = false;
+    abandonedShare = false;
     micStatusExpected = false;
     viewerRejoins = 0;
     rejoining = false;
     media?.close();
     media = null;
     ui.video.srcObject = null;
+    ui.video.hidden = true;
     ui.audio.hidden = true;
     ui.empty.hidden = false;
     ui.danmaku.replaceChildren();
@@ -253,6 +317,7 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
       const other = payload.peers?.find((item) => item.memberId !== context().memberId);
       peer = other ? { memberId: other.memberId, deviceId: other.deviceId } : null;
       sharerId = other?.sharer ? other.memberId : null;
+      sourceAudioMissing = Boolean(sharerId && other.hasSourceAudio !== true);
       paused = other?.paused === true;
       pendingPause = null;
       status(sharerId ? '正在连接画面…' : '等待共享画面');
@@ -278,17 +343,43 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
       render();
     } else if (type === 'screening.share.changed') {
       if (payload.memberId === context().memberId) {
-        isSharer = payload.active === true;
+        if (payload.active && pendingShare) {
+          const pending = pendingShare;
+          pendingShare = null;
+          win.clearTimeout(pending.timer);
+          isSharer = true;
+          sharerId = payload.memberId;
+          sourceAudioMissing = payload.hasSourceAudio !== true;
+          pending.resolve();
+        } else if (payload.active && abandonedShare) {
+          try { void command('screening.share', { active: false, hasSourceAudio: false }).catch(() => {}); } catch { /* Session may have closed. */ }
+        } else if (payload.active && !isSharer) {
+          abandonedShare = true;
+          try { void command('screening.share', { active: false, hasSourceAudio: false }).catch(() => {}); } catch { /* Session may have closed. */ }
+        } else if (!payload.active) {
+          isSharer = false;
+          if (sharerId === payload.memberId) sharerId = null;
+          sourceAudioMissing = false;
+          abandonedShare = false;
+        } else if (isSharer) sourceAudioMissing = payload.hasSourceAudio !== true;
       } else {
-        sharerId = payload.active ? payload.memberId : null;
+        if (payload.active) {
+          rejectPendingShare('对方已开始共享');
+          sharerId = payload.memberId;
+          sourceAudioMissing = payload.hasSourceAudio !== true;
+        } else if (sharerId === payload.memberId) {
+          sharerId = null;
+          sourceAudioMissing = false;
+        }
       }
       if (!payload.active) { paused = false; pendingPause = null; }
       if (!payload.active && payload.memberId !== context().memberId) {
         ui.video.srcObject = null;
+        ui.video.hidden = true;
         ui.empty.hidden = false;
         ui.audio.hidden = true;
       }
-      status(payload.active ? '正在连接画面…' : '等待共享画面');
+      status(sharerId ? isSharer ? '正在共享画面' : '正在连接画面…' : '等待共享画面');
       render();
     } else if (type === 'screening.signal' && peer?.deviceId === payload.deviceId) {
       const { kind, negotiationId, data } = payload;
@@ -312,11 +403,14 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   function onSocketOpen() {
     socketReady = true;
     if (!opened) return;
+    rejectPendingShare('连接已重置');
     sessionId = null;
     seq = 0;
     peer = null;
     sharerId = null;
     isSharer = false;
+    sourceAudioMissing = false;
+    abandonedShare = false;
     media?.close();
     media = null;
     micEverEnabled = false;
@@ -326,11 +420,14 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   }
   function onSocketClose() {
     socketReady = false;
+    rejectPendingShare('连接已断开');
     sessionId = null;
     seq = 0;
     peer = null;
     sharerId = null;
     isSharer = false;
+    sourceAudioMissing = false;
+    abandonedShare = false;
     media?.close();
     media = null;
     micEverEnabled = false;
@@ -398,6 +495,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   function takeover() { void join(true).catch(() => status('接管失败，请重试')); }
 
   trigger.addEventListener('click', open);
+  root.addEventListener('pointermove', wakeControls);
+  root.addEventListener('pointerdown', wakeControls);
+  root.addEventListener('focusin', wakeControls);
   ui.close.addEventListener('click', close);
   ui.share.addEventListener('click', toggleShare);
   ui.mic.addEventListener('click', toggleMic);
@@ -413,6 +513,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     close();
     disposed = true;
     trigger.removeEventListener('click', open);
+    root.removeEventListener('pointermove', wakeControls);
+    root.removeEventListener('pointerdown', wakeControls);
+    root.removeEventListener('focusin', wakeControls);
     ui.close.removeEventListener('click', close);
     ui.share.removeEventListener('click', toggleShare);
     ui.mic.removeEventListener('click', toggleMic);
