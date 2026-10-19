@@ -40,6 +40,23 @@ test('screening stage fills the shell beneath overlaid heading and controls', ()
   dom.window.close();
 });
 
+test('screening notices can scroll above controls in a short viewport', () => {
+  const dom = new JSDOM(html, { url: 'https://example.test/' });
+  const { document } = dom.window;
+  const notices = document.querySelector('.screening-notices');
+  assert.ok(notices);
+  for (const id of ['screening-status', 'screening-audio-indicator', 'screening-takeover', 'screening-confirm-row']) {
+    assert.equal(notices.contains(document.getElementById(id)), true);
+  }
+  assert.equal(notices.contains(document.querySelector('.screening-controls')), false);
+  const style = document.createElement('style');
+  style.textContent = css;
+  document.head.append(style);
+  assert.equal(dom.window.getComputedStyle(notices).overflowY, 'auto');
+  assert.match(css, /@media \(max-height: 420px\)[\s\S]*?\.screening-bottom\s*\{[^}]*max-height:\s*calc\(100% - 56px\);/);
+  dom.window.close();
+});
+
 test('narrow screening controls retain DOM tab order in two rows with touch-sized targets', () => {
   const controls = new JSDOM(html).window.document.querySelector('.screening-controls');
   assert.deepEqual([...controls.querySelectorAll('button, input')].map((node) => node.id || node.getAttribute('aria-label')),
@@ -47,6 +64,7 @@ test('narrow screening controls retain DOM tab order in two rows with touch-size
   assert.match(css, /@media \(max-width: 430px\)[\s\S]*?\.screening-message\s*\{[^}]*grid-column:\s*2\s*\/\s*4;/);
   assert.match(css, /@media \(max-width: 430px\)[\s\S]*?#screening-pause\s*\{[^}]*grid-column:\s*1;/);
   assert.match(css, /@media \(max-width: 430px\)[\s\S]*?\.screening-orb\s*\{[^}]*min-width:\s*44px;/);
+  assert.match(css, /@media \(max-width: 820px\), \(pointer: coarse\)[\s\S]*?\.screening-message input\s*\{[^}]*height:\s*44px;/);
   assert.match(css, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.screening-room\.is-idle[^}]*\.screening-controls\s*\{[^}]*opacity:\s*1;/);
 });
 
@@ -107,6 +125,10 @@ test('entry and glass controls remain accessible', async () => {
 test('desktop controls wake after idle on keyboard focus or pointer movement', async () => {
   const room = setup();
   const win = room.document.defaultView;
+  const style = room.document.createElement('style');
+  style.textContent = css;
+  room.document.head.append(style);
+  const controls = room.document.querySelector('.screening-controls');
   const originalSetTimeout = win.setTimeout.bind(win);
   let idleCallback;
   win.setTimeout = (callback, delay, ...args) => {
@@ -117,8 +139,23 @@ test('desktop controls wake after idle on keyboard focus or pointer movement', a
   assert.equal(typeof idleCallback, 'function');
   idleCallback();
   assert.equal(room.root.classList.contains('is-idle'), true);
+  assert.equal(win.getComputedStyle(controls).opacity, '0', 'initial dialog focus should not keep controls visible forever');
+  room.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+  assert.equal(room.root.classList.contains('is-keyboard-active'), true);
+  assert.equal(win.getComputedStyle(controls).opacity, '1');
+  room.root.dispatchEvent(new win.Event('pointermove', { bubbles: true }));
+  assert.equal(room.root.classList.contains('is-keyboard-active'), false);
+  idleCallback();
+  assert.equal(win.getComputedStyle(controls).opacity, '0');
+  room.document.activeElement.blur();
   room.document.querySelector('#screening-mic').focus();
   assert.equal(room.root.classList.contains('is-idle'), false);
+  room.root.dispatchEvent(new win.Event('pointerdown', { bubbles: true }));
+  assert.equal(room.root.classList.contains('is-keyboard-active'), false);
+  room.document.activeElement.blur();
+  await Promise.resolve();
+  room.document.querySelector('#screening-mic').focus();
+  assert.equal(room.root.classList.contains('is-keyboard-active'), false, 'pointer-origin focus should still fade');
   idleCallback();
   assert.equal(room.root.classList.contains('is-idle'), true);
   room.root.dispatchEvent(new win.Event('pointermove', { bubbles: true }));

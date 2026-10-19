@@ -1,7 +1,7 @@
 import { WaterBackground } from './water-background.js?v=7';
 import { initHtmlCanvasBridge } from './html-canvas-bridge.js';
 import { DoodleCanvas } from './doodle-canvas.js?v=5';
-import { createScreeningRoom } from './screening-room.js?v=1';
+import { createScreeningRoom } from './screening-room.js?v=2';
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {

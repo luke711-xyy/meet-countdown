@@ -185,14 +185,15 @@ button { cursor: pointer; }
 .screening-danmaku-item { position: absolute; right: -2%; max-width: min(65%, 28rem); overflow: hidden; padding: 4px 9px; border-radius: 999px; color: white; background: oklch(0.08 0.02 220 / 0.7); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; animation: screening-float 7s linear both; }
 @keyframes screening-float { from { transform: translateX(105%); } to { transform: translateX(calc(-100vw - 100%)); } }
 .screening-audio-action { position: absolute; z-index: 5; top: 50%; left: 50%; padding: 9px 16px; border: 1px solid oklch(1 0 0 / 0.35); border-radius: 999px; color: white; background: oklch(0.1 0.02 220 / 0.78); transform: translate(-50%, -50%); }
-.screening-bottom { position: absolute; z-index: 4; inset: auto 0 0; padding: 46px clamp(16px, 2vw, 28px) max(16px, env(safe-area-inset-bottom)); background: linear-gradient(0deg, oklch(0.035 0.01 220 / 0.92), oklch(0.035 0.01 220 / 0.54) 64%, transparent); }
+.screening-bottom { position: absolute; z-index: 4; inset: auto 0 0; display: flex; flex-direction: column; max-height: calc(100% - 84px); min-height: 0; padding: 46px clamp(16px, 2vw, 28px) max(16px, env(safe-area-inset-bottom)); background: linear-gradient(0deg, oklch(0.035 0.01 220 / 0.92), oklch(0.035 0.01 220 / 0.54) 64%, transparent); }
+.screening-notices { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .screening-status { min-height: 1.5em; margin: 0 0 9px; color: var(--ink); font-size: 12px; text-align: center; text-shadow: 0 1px 3px oklch(0 0 0 / 0.8); }
 .screening-audio-indicator { width: fit-content; margin: 0 auto 9px; padding: 5px 12px; border: 1px solid oklch(0.58 0.13 55 / 0.55); border-radius: 999px; color: var(--ink); background: oklch(0.78 0.11 75 / 0.24); font-size: 11px; text-align: center; }
 .screening-takeover { display: block; margin: 0 auto 9px; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--ink); background: var(--surface); font-size: 12px; }
 .screening-confirm-row { display: flex; justify-content: center; align-items: center; gap: 12px; margin: 0 0 9px; font-size: 12px; }
 .screening-confirm-row button { padding: 5px 12px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--ink); background: var(--surface); }
-.screening-controls { display: flex; align-items: center; justify-content: center; gap: clamp(8px, 1.5vw, 16px); min-height: 46px; opacity: 1; transition: opacity 240ms ease; }
-.screening-room.is-idle:not(:focus-within) .screening-controls { opacity: 0; pointer-events: none; }
+.screening-controls { display: flex; flex: none; align-items: center; justify-content: center; gap: clamp(8px, 1.5vw, 16px); min-height: 46px; opacity: 1; transition: opacity 240ms ease; }
+.screening-room.is-idle:not(.is-keyboard-active) .screening-controls { opacity: 0; pointer-events: none; }
 .screening-room.is-idle .screening-controls:hover { opacity: 1; pointer-events: auto; }
 .screening-orb { display: grid; flex: none; place-items: center; width: 42px; height: 42px; padding: 0; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--ink); background: var(--surface); transition: background 180ms var(--ease-out), transform 180ms var(--ease-out); }
 .screening-orb svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.4; }
@@ -210,8 +211,9 @@ button { cursor: pointer; }
   .screening-heading { padding-inline: 16px; }
   .screening-bottom { padding-inline: 12px; }
   .screening-orb { width: 44px; height: 44px; }
-  .screening-message { height: 44px; width: min(240px, 43vw); }
-  .screening-message button { min-width: 44px; height: 44px; margin: -3px -4px -3px 0; }
+  .screening-message { height: 46px; width: min(240px, 43vw); padding-block: 0; }
+  .screening-message input { height: 44px; }
+  .screening-message button { min-width: 44px; height: 44px; margin: 0 -4px 0 0; }
   .screening-audio-action, .screening-confirm-row button, .screening-takeover { min-height: 44px; }
   #open-screening { width: 44px; height: 44px; }
 }
@@ -226,8 +228,12 @@ button { cursor: pointer; }
   .screening-message button { padding: 0 9px; }
   .screening-status { font-size: 11px; }
 }
+@media (max-height: 420px) {
+  .screening-heading { min-height: 52px; padding-block: 10px 12px; }
+  .screening-bottom { max-height: calc(100% - 56px); padding-top: clamp(0px, 4vh, 18px); padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+}
 @media (hover: none), (pointer: coarse) {
-  .screening-room.is-idle:not(:focus-within) .screening-controls { opacity: 1; pointer-events: auto; }
+  .screening-room.is-idle:not(.is-keyboard-active) .screening-controls { opacity: 1; pointer-events: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .screening-controls { transition: none; }

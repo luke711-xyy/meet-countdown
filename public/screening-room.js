@@ -48,6 +48,8 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   let latestReleaseSeq = 0;
   let confirmedShareSeq = 0;
   let idleTimer = null;
+  let openingFocus = false;
+  let pointerFocusPending = false;
   let micStatusExpected = false;
   let viewerRejoins = 0;
   let rejoining = false;
@@ -74,6 +76,20 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     root.classList.remove('is-idle');
     if (idleTimer !== null) win.clearTimeout(idleTimer);
     idleTimer = win.setTimeout(() => { idleTimer = null; root.classList.add('is-idle'); }, CONTROLS_IDLE_MS);
+  }
+  function onPointerDown() {
+    pointerFocusPending = true;
+    root.classList.remove('is-keyboard-active');
+    wakeControls();
+  }
+  function onPointerMove() {
+    root.classList.remove('is-keyboard-active');
+    wakeControls();
+  }
+  function onFocusIn() {
+    if (!openingFocus && !pointerFocusPending) root.classList.add('is-keyboard-active');
+    pointerFocusPending = false;
+    wakeControls();
   }
 
   function context() { return getContext() || {}; }
@@ -259,7 +275,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     inertState = [...behind].map((node) => [node, node.inert]);
     for (const [node] of inertState) node.inert = true;
     doc.documentElement.classList.add('screening-is-open');
+    openingFocus = true;
     ui.close.focus();
+    openingFocus = false;
     wakeControls();
     onOpenChange(true);
     mediaSession();
@@ -275,6 +293,8 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     if (idleTimer !== null) win.clearTimeout(idleTimer);
     idleTimer = null;
     root.classList.remove('is-idle');
+    root.classList.remove('is-keyboard-active');
+    pointerFocusPending = false;
     if (notify && sessionId && socketReady) {
       try { void command('screening.leave').catch(() => {}); } catch { /* Socket may have closed. */ }
     }
@@ -504,6 +524,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   }
   function onKeydown(event) {
     if (!opened) return;
+    pointerFocusPending = false;
+    root.classList.add('is-keyboard-active');
+    wakeControls();
     if (event.key === 'Escape') { event.preventDefault(); close(); return; }
     if (event.key !== 'Tab') return;
     const focusables = [...root.querySelectorAll('button:not(:disabled), input:not(:disabled)')]
@@ -521,9 +544,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
   function takeover() { void join(true).catch(() => status('接管失败，请重试')); }
 
   trigger.addEventListener('click', open);
-  root.addEventListener('pointermove', wakeControls);
-  root.addEventListener('pointerdown', wakeControls);
-  root.addEventListener('focusin', wakeControls);
+  root.addEventListener('pointermove', onPointerMove);
+  root.addEventListener('pointerdown', onPointerDown);
+  root.addEventListener('focusin', onFocusIn);
   ui.close.addEventListener('click', close);
   ui.share.addEventListener('click', toggleShare);
   ui.mic.addEventListener('click', toggleMic);
@@ -539,9 +562,9 @@ export function createScreeningRoom({ root, trigger, send, getContext, onOpenCha
     close();
     disposed = true;
     trigger.removeEventListener('click', open);
-    root.removeEventListener('pointermove', wakeControls);
-    root.removeEventListener('pointerdown', wakeControls);
-    root.removeEventListener('focusin', wakeControls);
+    root.removeEventListener('pointermove', onPointerMove);
+    root.removeEventListener('pointerdown', onPointerDown);
+    root.removeEventListener('focusin', onFocusIn);
     ui.close.removeEventListener('click', close);
     ui.share.removeEventListener('click', toggleShare);
     ui.mic.removeEventListener('click', toggleMic);

@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#15202a" />
     <title>见面倒计时</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css?v=15" />
+    <link rel="stylesheet" href="/styles.css?v=16" />
   </head>
   <body>
     <section class="auth-gate" id="auth-gate" aria-labelledby="auth-title">
@@ -97,10 +97,12 @@
           <button class="screening-audio-action" id="screening-enable-audio" type="button" hidden>开启声音</button>
         </div>
         <div class="screening-bottom">
-          <p class="screening-status" id="screening-status" role="status" aria-live="polite">等待加入放映室</p>
-          <p class="screening-audio-indicator" id="screening-audio-indicator" role="status" aria-live="polite" hidden>未共享影片声音</p>
-          <button class="screening-takeover" id="screening-takeover" type="button" hidden>在此设备接管</button>
-          <div class="screening-confirm-row" id="screening-confirm-row" hidden><span id="screening-confirm-text">请在播放器中暂停</span><button type="button" id="screening-confirm">已暂停</button></div>
+          <div class="screening-notices">
+            <p class="screening-status" id="screening-status" role="status" aria-live="polite">等待加入放映室</p>
+            <p class="screening-audio-indicator" id="screening-audio-indicator" role="status" aria-live="polite" hidden>未共享影片声音</p>
+            <button class="screening-takeover" id="screening-takeover" type="button" hidden>在此设备接管</button>
+            <div class="screening-confirm-row" id="screening-confirm-row" hidden><span id="screening-confirm-text">请在播放器中暂停</span><button type="button" id="screening-confirm">已暂停</button></div>
+          </div>
           <div class="screening-controls" role="group" aria-label="放映控制">
             <button class="screening-orb" id="screening-mic" type="button" aria-label="开启麦克风" aria-pressed="false" title="麦克风"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg></button>
             <form class="screening-message" id="screening-danmaku-form"><label class="sr-only" for="screening-danmaku-input">发送弹幕</label><input id="screening-danmaku-input" type="text" maxlength="80" placeholder="发一条弹幕" autocomplete="off"/><button type="submit" aria-label="发送弹幕">发送</button></form>
@@ -224,6 +226,6 @@
     <div class="context-menu hidden" id="context-menu" role="menu">
       <button id="context-delete" type="button" role="menuitem">删除</button>
     </div>
-    <script type="module" src="/app.js?v=14"></script>
+    <script type="module" src="/app.js?v=15"></script>
   </body>
 </html>
