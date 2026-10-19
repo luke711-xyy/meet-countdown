@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 const origin = new URL(process.env.SCREENING_TEST_ORIGIN ?? 'http://127.0.0.1:8787');
@@ -10,6 +13,14 @@ if (origin.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const packet = (type, payload) => JSON.stringify({ type, payload });
+const execFileAsync = promisify(execFile);
+
+async function localSql(command) {
+  const wrangler = fileURLToPath(new URL('../node_modules/.bin/wrangler', import.meta.url));
+  const cwd = fileURLToPath(new URL('..', import.meta.url));
+  const { stdout } = await execFileAsync(wrangler, ['d1', 'execute', 'meet-countdown-db', '--local', '--command', command, '--json'], { cwd });
+  assert.equal(JSON.parse(stdout).every(({ success }) => success), true, 'local D1 setup succeeds');
+}
 
 async function request(path, { cookie, method = 'GET', body } = {}) {
   const response = await fetch(new URL(path, origin), {
@@ -17,32 +28,47 @@ async function request(path, { cookie, method = 'GET', body } = {}) {
     headers: { ...(cookie ? { Cookie: cookie } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  return { status: response.status, cookie: response.headers.get('set-cookie')?.split(';')[0], body: await response.json() };
+  const raw = await response.text();
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+  return { status: response.status, cookie: response.headers.get('set-cookie')?.split(';')[0], body: parsed };
 }
 
 async function register() {
   const username = `screen${randomUUID().replaceAll('-', '').slice(0, 14)}`;
+  const password = randomUUID();
   const response = await request('/api/auth/register', {
-    method: 'POST', body: { username, password: randomUUID() },
+    method: 'POST', body: { username, password },
   });
   assert.equal(response.status, 201, 'local test account registration succeeds');
   assert.ok(response.cookie, 'registration returns an auth cookie');
-  return { cookie: response.cookie, memberId: response.body.user.id };
+  return { cookie: response.cookie, memberId: response.body.user.id, username, password };
 }
 
 async function fixture(t, { outsider = false } = {}) {
   const accounts = [];
   const sockets = [];
   let roomId;
+  let destroyed = false;
   t.after(async () => {
     await Promise.all(sockets.map(async (client) => {
       if (client.ws.readyState === WebSocket.CLOSED) return;
       client.ws.close();
       await Promise.race([client.closed, wait(500)]);
-      if (client.ws.readyState !== WebSocket.CLOSED) client.ws.terminate();
+      if (client.ws.readyState !== WebSocket.CLOSED) {
+        client.ws.terminate();
+        await Promise.race([client.closed, wait(500)]);
+      }
+      assert.equal(client.ws.readyState, WebSocket.CLOSED, 'fixture WebSocket closes');
     }));
-    if (roomId) await request(`/api/room?room=${roomId}`, { method: 'DELETE', cookie: accounts[0]?.cookie });
-    await Promise.all(accounts.map(({ cookie }) => request('/api/auth/logout', { method: 'POST', cookie })));
+    if (roomId && !destroyed) {
+      const path = `/api/room?room=${roomId}`;
+      let deletion = await request(path, { method: 'DELETE', cookie: accounts[0]?.cookie });
+      if (deletion.status === 401 || deletion.status === 403) deletion = await request(path, { method: 'DELETE', cookie: accounts[1]?.cookie });
+      assert.equal(deletion.status, 200, 'fixture room deletion succeeds');
+    }
+    const logouts = await Promise.all(accounts.map(({ cookie }) => request('/api/auth/logout', { method: 'POST', cookie })));
+    for (const logout of logouts) assert.equal(logout.status, 200, 'fixture session logout succeeds');
   });
   const first = await register();
   accounts.push(first);
@@ -58,7 +84,11 @@ async function fixture(t, { outsider = false } = {}) {
     guest = await register();
     accounts.push(guest);
   }
-  return { first, second, guest, roomId, sockets, destroy: () => request(`/api/room?room=${roomId}`, { method: 'DELETE', cookie: first.cookie }) };
+  return { first, second, guest, roomId, sockets, accounts, destroy: async () => {
+    const result = await request(`/api/room?room=${roomId}`, { method: 'DELETE', cookie: first.cookie });
+    if (result.status === 200) destroyed = true;
+    return result;
+  } };
 }
 
 function wsUrl(roomId) {
@@ -172,10 +202,82 @@ test('pause and room destruction reach both clients', async (t) => {
   await event(sharer, 'room.destroyed');
   const peerEvents = viewer.events;
   await event(viewer, 'room.destroyed');
-  assert.equal(peerEvents.at(-1).type, 'room.destroyed');
   await Promise.race([Promise.all([sharer.closed, viewer.closed]), wait(500)]);
   assert.equal(sharer.ws.readyState, WebSocket.CLOSED, 'deleted room closes the sharer socket');
   assert.equal(viewer.ws.readyState, WebSocket.CLOSED, 'deleted room closes the viewer socket');
+  assert.equal(peerEvents.at(-1).type, 'room.destroyed');
+});
+
+test('room teardown rejects upgrades despite surviving membership', async (t) => {
+  const room = await fixture(t);
+  const member = await connect(room.roomId, room.first.cookie, room.sockets);
+  const deleted = await room.destroy();
+  assert.equal(deleted.status, 200);
+  await event(member, 'room.destroyed');
+  // Rebuild just the local D1 membership to hold the pre-delete DB view steady.
+  // A late upgrade must still be rejected by the Durable Object teardown gate.
+  assert.match(room.roomId, /^room_[a-z0-9]{10}$/);
+  assert.match(room.first.memberId, /^user_[0-9a-f-]{36}$/);
+  const now = new Date().toISOString();
+  try {
+    await localSql(`INSERT INTO rooms (id,target_at,created_at,updated_at) VALUES ('${room.roomId}','${now}','${now}','${now}'); INSERT INTO room_members (room_id,user_id,slot,joined_at) VALUES ('${room.roomId}','${room.first.memberId}',0,'${now}');`);
+    const lateUpgrade = await rejectedSocket(room.roomId, room.first.cookie);
+    assert.equal(lateUpgrade.status, 410);
+  } finally {
+    await localSql(`DELETE FROM room_members WHERE room_id = '${room.roomId}'; DELETE FROM rooms WHERE id = '${room.roomId}';`);
+  }
+});
+
+test('failed room deletion restores the upgrade gate', async (t) => {
+  const room = await fixture(t);
+  const member = await connect(room.roomId, room.first.cookie, room.sockets);
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII=', 'base64');
+  const backgroundUrl = new URL(`/api/background?room=${room.roomId}`, origin);
+  const uploaded = await fetch(backgroundUrl, { method: 'PUT', headers: { Cookie: room.first.cookie, 'Content-Type': 'image/png' }, body: image });
+  assert.equal(uploaded.status, 200);
+  const trigger = `test_room_delete_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  assert.match(room.roomId, /^room_[a-z0-9]{10}$/);
+  await localSql(`CREATE TRIGGER ${trigger} BEFORE DELETE ON rooms WHEN OLD.id = '${room.roomId}' BEGIN SELECT RAISE(ABORT, 'test deletion failure'); END;`);
+  try {
+    const failed = await room.destroy();
+    assert.equal(failed.status, 500);
+    assert.equal(member.events.filter(({ type }) => type === 'room.destroyed').length, 0, 'failed deletion does not announce destruction');
+    assert.equal(member.ws.readyState, WebSocket.OPEN, 'failed deletion leaves existing socket open');
+    const background = await fetch(backgroundUrl, { headers: { Cookie: room.first.cookie } });
+    assert.equal(background.status, 200, 'failed deletion retains room media');
+    assert.deepEqual(Buffer.from(await background.arrayBuffer()), image);
+    const returned = await connect(room.roomId, room.first.cookie, room.sockets);
+    assert.equal(returned.events[0].type, 'room.ready');
+    returned.ws.send(packet('pointer', { x: 0.5, y: 0.5, strength: 0.5 }));
+    await event(member, 'pointer');
+  } finally {
+    await localSql(`DROP TRIGGER IF EXISTS ${trigger};`);
+  }
+});
+
+test('logout closes only sockets of that login session', async (t) => {
+  const room = await fixture(t);
+  const secondLogin = await request('/api/auth/login', {
+    method: 'POST', body: { username: room.first.username, password: room.first.password },
+  });
+  assert.equal(secondLogin.status, 200);
+  room.accounts.push({ cookie: secondLogin.cookie });
+  const oldA = await connect(room.roomId, room.first.cookie, room.sockets);
+  const oldB = await connect(room.roomId, room.first.cookie, room.sockets);
+  const current = await connect(room.roomId, secondLogin.cookie, room.sockets);
+  const peer = await connect(room.roomId, room.second.cookie, room.sockets);
+  await join(oldA, 'old-device');
+  await join(peer, 'peer-device');
+  const logout = await request('/api/auth/logout', { method: 'POST', cookie: room.first.cookie });
+  assert.equal(logout.status, 200);
+  const deadline = Date.now() + 2_000;
+  while ((oldA.ws.readyState === WebSocket.OPEN || oldB.ws.readyState === WebSocket.OPEN) && Date.now() < deadline) await wait(10);
+  assert.notEqual(oldA.ws.readyState, WebSocket.OPEN, 'logout closes first socket');
+  assert.notEqual(oldB.ws.readyState, WebSocket.OPEN, 'logout closes second socket');
+  assert.equal(current.ws.readyState, WebSocket.OPEN, 'independent login stays connected');
+  const currentSession = await join(current, 'current-device');
+  current.ws.send(packet('screening.share', { sessionId: currentSession, seq: 1, active: true, hasSourceAudio: false }));
+  assert.equal((await event(peer, 'screening.share.changed')).payload.deviceId, 'current-device');
 });
 
 test('stale session and duplicate sequence cannot change share state', async (t) => {

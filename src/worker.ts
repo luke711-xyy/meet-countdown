@@ -29,6 +29,7 @@ const MAX_RETENTION_DAYS = 36500;
 const DOODLE_STYLES = new Set(['neon', 'fireworks']);
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const AUTH_COOKIE = 'meet_auth';
+const ROOM_DESTROYING_KEY = 'room:destroying';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 365;
 const PASSWORD_ITERATIONS = 100_000;
 
@@ -181,7 +182,7 @@ async function verifyPassword(password: string, saltBase64: string, expectedHash
   return (await hashPassword(password, fromBase64(saltBase64))) === expectedHash;
 }
 
-async function authenticatedUser(request: Request, env: Env) {
+async function authenticatedSession(request: Request, env: Env) {
   const token = cookie(request, AUTH_COOKIE);
   if (!token) return null;
   const tokenHash = await sha256(token);
@@ -191,7 +192,11 @@ async function authenticatedUser(request: Request, env: Env) {
     JOIN users ON users.id = auth_sessions.user_id
     WHERE auth_sessions.token_hash = ?1 AND auth_sessions.expires_at > ?2
   `).bind(tokenHash, nowIso()).first<AuthUser>();
-  return result || null;
+  return result ? { user: result, tokenHash } : null;
+}
+
+async function authenticatedUser(request: Request, env: Env) {
+  return (await authenticatedSession(request, env))?.user ?? null;
 }
 
 function withAuthCookie(response: Response, request: Request, token: string) {
@@ -249,7 +254,24 @@ async function handleAuth(request: Request, env: Env, action: 'register' | 'logi
   }
   if (action === 'logout') {
     const token = cookie(request, AUTH_COOKIE);
-    if (token) await env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash = ?1').bind(await sha256(token)).run();
+    if (token) {
+      const tokenHash = await sha256(token);
+      const session = await env.DB.prepare('SELECT user_id AS userId FROM auth_sessions WHERE token_hash = ?1')
+        .bind(tokenHash).first<{ userId: string }>();
+      const rooms = session ? await env.DB.prepare('SELECT room_id AS roomId FROM room_members WHERE user_id = ?1')
+        .bind(session.userId).all<{ roomId: string }>() : { results: [] as { roomId: string }[] };
+      const revoking: DurableObjectStub<CoupleRoom>[] = [];
+      try {
+        for (const { roomId } of rooms.results ?? []) {
+          const stub = env.COUPLE_ROOM.getByName(roomId);
+          revoking.push(stub);
+          await stub.revokeSession(tokenHash);
+        }
+        await env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash = ?1').bind(tokenHash).run();
+      } finally {
+        await Promise.all(revoking.map((stub) => stub.finishSessionRevocation(tokenHash)));
+      }
+    }
     return clearAuthCookie(json({ ok: true }), request);
   }
 
@@ -452,19 +474,36 @@ async function destroyRoom(env: Env, roomId: string, user: AuthUser) {
   const room = await env.DB.prepare('SELECT id FROM rooms WHERE id = ?1').bind(roomId).first();
   if (!room) return json({ error: '房间不存在。' }, 404);
 
-  await broadcast(env, roomId, 'room.destroyed', { actorId: user.id, actorName: user.username });
-  const voiceObjects = await env.MEDIA.list({ prefix: `rooms/${roomId}/voice/` });
-  await Promise.all([
-    env.MEDIA.delete(`rooms/${roomId}/background`),
-    ...voiceObjects.objects.map((object) => env.MEDIA.delete(object.key)),
-  ]);
-  await env.DB.batch([
-    env.DB.prepare('DELETE FROM voice_notes WHERE room_id = ?1').bind(roomId),
-    env.DB.prepare('DELETE FROM tasks WHERE room_id = ?1').bind(roomId),
-    env.DB.prepare('DELETE FROM doodles WHERE room_id = ?1').bind(roomId),
-    env.DB.prepare('DELETE FROM room_members WHERE room_id = ?1').bind(roomId),
-    env.DB.prepare('DELETE FROM rooms WHERE id = ?1').bind(roomId),
-  ]);
+  const stub = env.COUPLE_ROOM.getByName(roomId);
+  const attemptId = crypto.randomUUID();
+  if (!(await stub.beginDestroy(attemptId))) return json({ error: '房间正在销毁。' }, 409);
+  let deleted = false;
+  let voiceKeys: string[] = [];
+  try {
+    const voiceObjects = await env.MEDIA.list({ prefix: `rooms/${roomId}/voice/` });
+    voiceKeys = voiceObjects.objects.map((object) => object.key);
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM voice_notes WHERE room_id = ?1').bind(roomId),
+      env.DB.prepare('DELETE FROM tasks WHERE room_id = ?1').bind(roomId),
+      env.DB.prepare('DELETE FROM doodles WHERE room_id = ?1').bind(roomId),
+      env.DB.prepare('DELETE FROM room_members WHERE room_id = ?1').bind(roomId),
+      env.DB.prepare('DELETE FROM rooms WHERE id = ?1').bind(roomId),
+    ]);
+    deleted = true;
+    await broadcast(env, roomId, 'room.destroyed', { actorId: user.id, actorName: user.username });
+  } catch (error) {
+    if (!deleted) await stub.cancelDestroy(attemptId);
+    throw error;
+  }
+  try {
+    await Promise.all([
+      env.MEDIA.delete(`rooms/${roomId}/background`),
+      ...voiceKeys.map((key) => env.MEDIA.delete(key)),
+    ]);
+  } catch (error) {
+    // D1 committed: the room is gone, so a cleanup failure must not look like a failed deletion.
+    console.error('room_media_cleanup_failed', error);
+  }
   return json({ ok: true, roomId });
 }
 
@@ -675,7 +714,8 @@ export default {
       if (url.pathname === '/api/auth/logout' && request.method === 'POST') return handleAuth(request, env, 'logout');
       if (url.pathname === '/api/auth/me' && request.method === 'GET') return handleAuth(request, env, 'me');
 
-      const user = await authenticatedUser(request, env);
+      const session = await authenticatedSession(request, env);
+      const user = session?.user ?? null;
       if (url.pathname === '/api/room' && request.method === 'POST') {
         if (!user) return json({ error: '请先登录。' }, 401);
         return handleRoom(request, env, user);
@@ -694,6 +734,7 @@ export default {
         const stub = env.COUPLE_ROOM.getByName(roomId);
         const headers = new Headers(request.headers);
         headers.set('X-Member-Id', user.id);
+        headers.set('X-Auth-Session-Hash', session!.tokenHash);
         return stub.fetch(new Request(request, { headers }));
       }
       if (url.pathname === '/api/state' && request.method === 'GET') {
@@ -731,18 +772,71 @@ export default {
 
 export class CoupleRoom extends DurableObject<Env> {
   private disconnectedScreeningSockets = new WeakSet<WebSocket>();
+  private roomDestroying: boolean | undefined;
+  private destroyAttemptId: string | undefined;
+  private revokingSessions = new Set<string>();
+
+  private async isRoomDestroying() {
+    if (this.roomDestroying !== undefined) return this.roomDestroying;
+    const stored = await this.ctx.storage.get<boolean | string>(ROOM_DESTROYING_KEY);
+    if (this.roomDestroying === true) return true;
+    this.roomDestroying = Boolean(stored);
+    return this.roomDestroying;
+  }
+
+  async beginDestroy(attemptId: string) {
+    if (!/^[0-9a-f-]{36}$/.test(attemptId)) throw new Error('Invalid destruction attempt');
+    if (this.destroyAttemptId || this.roomDestroying) return false;
+    const previous = this.roomDestroying;
+    this.destroyAttemptId = attemptId;
+    this.roomDestroying = true; // Reject upgrades immediately, including ones already awaiting D1.
+    let stored: boolean | string | undefined;
+    let started = false;
+    try {
+      stored = await this.ctx.storage.get<boolean | string>(ROOM_DESTROYING_KEY);
+      if (stored) return false;
+      await this.ctx.storage.put(ROOM_DESTROYING_KEY, attemptId);
+      started = true;
+      return true;
+    } finally {
+      if (!started) {
+        this.destroyAttemptId = undefined;
+        this.roomDestroying = stored ? true : previous;
+      }
+    }
+  }
+
+  async cancelDestroy(attemptId: string) {
+    if (this.destroyAttemptId && this.destroyAttemptId !== attemptId) return;
+    if (await this.ctx.storage.get<string>(ROOM_DESTROYING_KEY) !== attemptId) return;
+    await this.ctx.storage.delete(ROOM_DESTROYING_KEY);
+    this.destroyAttemptId = undefined;
+    this.roomDestroying = false;
+  }
+
+  private revocationKey(tokenHash: string) { return `session:revoking:${tokenHash}`; }
 
   async fetch(request: Request) {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
     const url = new URL(request.url);
     const roomId = url.searchParams.get('room') || '';
     const memberId = request.headers.get('X-Member-Id') || '';
-    if (!memberId) return new Response('Unauthorized', { status: 401 });
+    const authSessionHash = request.headers.get('X-Auth-Session-Hash') || '';
+    if (!memberId || !/^[A-Za-z0-9_-]{43}$/.test(authSessionHash)) return new Response('Unauthorized', { status: 401 });
+    if (await this.isRoomDestroying()) return new Response('Room destroyed', { status: 410 });
+    if (this.revokingSessions.has(authSessionHash) || await this.ctx.storage.get<boolean>(this.revocationKey(authSessionHash))) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+    // A Worker request can pass its D1 check before logout and arrive here after revocation.
+    const liveSession = await this.env.DB.prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ?1 AND user_id = ?2 AND expires_at > ?3')
+      .bind(authSessionHash, memberId, nowIso()).first();
+    if (this.roomDestroying) return new Response('Room destroyed', { status: 410 });
+    if (!liveSession || this.revokingSessions.has(authSessionHash)) return new Response('Unauthorized', { status: 401 });
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ roomId, memberId, socketId: crypto.randomUUID() });
+    server.serializeAttachment({ roomId, memberId, authSessionHash, socketId: crypto.randomUUID() });
     server.send(JSON.stringify({ type: 'room.ready', payload: { roomId, memberId }, createdAt: nowIso() }));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -755,6 +849,24 @@ export class CoupleRoom extends DurableObject<Env> {
         try { socket.close(1000, 'Room destroyed'); } catch { /* socket already closed */ }
       }
     }
+  }
+
+  async revokeSession(tokenHash: string) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(tokenHash)) throw new Error('Invalid session hash');
+    this.revokingSessions.add(tokenHash);
+    try { await this.ctx.storage.put(this.revocationKey(tokenHash), true); }
+    catch (error) { this.revokingSessions.delete(tokenHash); throw error; }
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as { authSessionHash?: string; authRevoked?: boolean } | null;
+      if (attachment?.authSessionHash !== tokenHash) continue;
+      socket.serializeAttachment({ ...attachment, authRevoked: true });
+      try { socket.close(1008, 'Session ended'); } catch { /* socket already closed */ }
+    }
+  }
+
+  async finishSessionRevocation(tokenHash: string) {
+    await this.ctx.storage.delete(this.revocationKey(tokenHash));
+    this.revokingSessions.delete(tokenHash);
   }
 
   private screeningSockets(extraSocket?: WebSocket) {
@@ -794,7 +906,15 @@ export class CoupleRoom extends DurableObject<Env> {
     this.applyScreening(result, byId);
   }
 
-  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+    const attachment = socket.deserializeAttachment() as { authSessionHash?: string; authRevoked?: boolean } | null;
+    // A deletion can still fail. Hold existing sockets open until success is committed
+    // and room.destroyed is broadcast, rather than closing them during the gate.
+    if (await this.isRoomDestroying()) return;
+    if (!attachment?.authSessionHash || attachment.authRevoked || this.revokingSessions.has(attachment.authSessionHash)) {
+      try { socket.close(1008, 'Session ended'); } catch { /* socket already closed */ }
+      return;
+    }
     if (typeof message !== 'string') return;
     if (shouldRejectOversizedRealtimeMessage(message)) return;
     try {
@@ -847,6 +967,6 @@ export class CoupleRoom extends DurableObject<Env> {
     }
   }
 
-  webSocketClose(socket: WebSocket) { this.leaveScreening(socket); }
-  webSocketError(socket: WebSocket) { this.leaveScreening(socket); }
+  async webSocketClose(socket: WebSocket) { if (!(await this.isRoomDestroying())) this.leaveScreening(socket); }
+  async webSocketError(socket: WebSocket) { if (!(await this.isRoomDestroying())) this.leaveScreening(socket); }
 }
