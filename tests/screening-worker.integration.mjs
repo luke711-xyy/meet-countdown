@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import WebSocket from 'ws';
 
 const origin = new URL(process.env.SCREENING_TEST_ORIGIN ?? 'http://127.0.0.1:8787');
@@ -307,4 +308,226 @@ test('danmaku is rate limited by the Worker', async (t) => {
   sender.ws.send(packet('screening.danmaku', { sessionId, seq: 2, text: 'too fast' }));
   await wait(100);
   assert.equal(viewer.events.filter(({ type }) => type === 'screening.danmaku').length, 1);
+});
+
+// Fault-injected boundary tests run the actual Worker module with controlled
+// D1/DO/R2 adapters. Wrangler exercises the normal path in the tests above;
+// these adapters make otherwise rare asynchronous failures deterministic.
+let workerModule;
+async function loadWorkerForFaultTests() {
+  if (!workerModule) {
+    const compiled = await build({
+      entryPoints: [fileURLToPath(new URL('../src/worker.ts', import.meta.url))],
+      bundle: true, platform: 'node', format: 'esm', write: false,
+      plugins: [{ name: 'cloudflare-workers-test-shim', setup(builder) {
+        builder.onResolve({ filter: /^cloudflare:workers$/ }, () => ({ path: 'cloudflare:workers', namespace: 'test-shim' }));
+        builder.onLoad({ filter: /.*/, namespace: 'test-shim' }, () => ({
+          contents: 'export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }', loader: 'js',
+        }));
+      } }],
+    });
+    workerModule = import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].contents).toString('base64')}`);
+  }
+  return workerModule;
+}
+
+function faultContext() {
+  const entries = new Map();
+  const sockets = [];
+  let alarmAt = null;
+  return {
+    sockets,
+    entries,
+    get alarmAt() { return alarmAt; },
+    getWebSockets: () => sockets,
+    acceptWebSocket: (socket) => sockets.push(socket),
+    storage: {
+      get: async (key) => entries.get(key),
+      put: async (key, value) => { entries.set(key, value); },
+      delete: async (key) => entries.delete(key),
+      setAlarm: async (when) => { alarmAt = Number(when); },
+      deleteAlarm: async () => { alarmAt = null; },
+    },
+  };
+}
+
+function faultSocket() {
+  const messages = [];
+  let attachment = null;
+  return {
+    messages,
+    closed: false,
+    send(raw) { messages.push(JSON.parse(raw)); },
+    close() { this.closed = true; },
+    serializeAttachment(value) { attachment = value; },
+    deserializeAttachment() { return attachment; },
+  };
+}
+
+async function destroyFaultFixture({ rpcFailure = false, mediaFailure = false, holdMediaList = false, holdMediaDelete = false } = {}) {
+  const { default: worker, CoupleRoom } = await loadWorkerForFaultTests();
+  const roomId = 'room_abcdefghij';
+  const memberId = `user_${randomUUID()}`;
+  const cookie = 'meet_auth=fault-test-session';
+  const tokenHash = createHash('sha256').update('fault-test-session').digest('base64url');
+  const backgroundKey = `rooms/${roomId}/background`;
+  const voiceKey = `rooms/${roomId}/voice/example`;
+  const mediaObjects = new Set([backgroundKey, voiceKey]);
+  let roomExists = true;
+  let memberExists = true;
+  let remainingRpcFailures = Number(rpcFailure);
+  let remainingMediaFailures = Number(mediaFailure);
+  let signalMediaList;
+  const mediaListStarted = new Promise((resolve) => { signalMediaList = resolve; });
+  let releaseMediaList;
+  const mediaListGate = new Promise((resolve) => { releaseMediaList = resolve; });
+  let signalMediaDelete;
+  const mediaDeleteStarted = new Promise((resolve) => { signalMediaDelete = resolve; });
+  let releaseMediaDelete;
+  const mediaDeleteGate = new Promise((resolve) => { releaseMediaDelete = resolve; });
+  const context = faultContext();
+  const socket = faultSocket();
+  context.sockets.push(socket);
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          bind(...params) {
+            return {
+              async first() {
+                if (sql.includes('FROM auth_sessions') && sql.includes('JOIN users')) return params[0] === tokenHash ? { id: memberId, username: 'owner' } : null;
+                if (sql.includes('FROM room_members JOIN users')) return memberExists ? { roomId, userId: memberId, slot: 0, username: 'owner' } : null;
+                if (sql.includes('SELECT id FROM rooms')) return roomExists ? { id: roomId } : null;
+                throw new Error(`Unexpected D1 read: ${sql}`);
+              },
+            };
+          },
+        };
+      },
+      async batch() { memberExists = false; roomExists = false; return []; },
+    },
+    MEDIA: {
+      async list() {
+        signalMediaList();
+        if (holdMediaList) await mediaListGate;
+        return { objects: [{ key: voiceKey }] };
+      },
+      async delete(key) {
+        if (key === backgroundKey) {
+          signalMediaDelete();
+          if (holdMediaDelete) await mediaDeleteGate;
+        }
+        if (key === backgroundKey && remainingMediaFailures-- > 0) throw new Error('injected R2 delete failure');
+        mediaObjects.delete(key);
+      },
+    },
+  };
+  const durable = new CoupleRoom(context, env);
+  const failRpcOnce = async (method, args) => {
+    if (remainingRpcFailures-- > 0) throw new Error('injected DO RPC failure');
+    return durable[method](...args);
+  };
+  env.COUPLE_ROOM = { getByName: () => ({
+    beginDestroy: (...args) => durable.beginDestroy(...args),
+    cancelDestroy: (...args) => durable.cancelDestroy(...args),
+    setDestroyMedia: (...args) => durable.setDestroyMedia(...args),
+    broadcast: (...args) => failRpcOnce('broadcast', args),
+    finalizeDestroy: (...args) => failRpcOnce('finalizeDestroy', args),
+  }) };
+  return {
+    worker, durable, context, socket, roomId, cookie, mediaObjects,
+    mediaListStarted, releaseMediaList, mediaDeleteStarted, releaseMediaDelete,
+    get roomExists() { return roomExists; },
+    destroy: async () => worker.fetch(new Request(`http://localhost/api/room?room=${roomId}`, {
+      method: 'DELETE', headers: { Cookie: cookie },
+    }), env),
+  };
+}
+
+test('room deletion gates upgrades while R2 media listing is pending', async () => {
+  const room = await destroyFaultFixture({ holdMediaList: true });
+  const deletion = room.destroy();
+  try {
+    await room.mediaListStarted;
+    assert.equal(room.context.entries.has('room:destroying'), true, 'teardown gate precedes the R2 listing await');
+  } finally {
+    room.releaseMediaList();
+  }
+  assert.equal((await deletion).status, 200);
+});
+
+test('logout waits for a pre-deletion D1 upgrade read before clearing revocation', async () => {
+  const { CoupleRoom } = await loadWorkerForFaultTests();
+  const context = faultContext();
+  const tokenHash = createHash('sha256').update('fault-test-session').digest('base64url');
+  let readStarted;
+  const started = new Promise((resolve) => { readStarted = resolve; });
+  let releaseRead;
+  const staleRead = new Promise((resolve) => { releaseRead = resolve; });
+  const env = { DB: { prepare: () => ({ bind: () => ({ first: () => { readStarted(); return staleRead; } }) }) } };
+  const durable = new CoupleRoom(context, env);
+  const NativeResponse = globalThis.Response;
+  const NativePair = globalThis.WebSocketPair;
+  globalThis.Response = class extends NativeResponse {
+    constructor(body, init) { if (init?.status === 101) return { status: 101, webSocket: init.webSocket }; super(body, init); }
+  };
+  globalThis.WebSocketPair = class { constructor() { this[0] = faultSocket(); this[1] = faultSocket(); } };
+  try {
+    const upgrade = durable.fetch(new Request('http://localhost/ws?room=room_abcdefghij', {
+      headers: { Upgrade: 'websocket', 'X-Member-Id': 'user_example', 'X-Auth-Session-Hash': tokenHash },
+    }));
+    await started;
+    await durable.revokeSession(tokenHash);
+    let revocationFinished = false;
+    const finishing = durable.finishSessionRevocation(tokenHash).then(() => { revocationFinished = true; });
+    await wait(25);
+    const finishedBeforeRead = revocationFinished;
+    releaseRead({ 1: 1 }); // The query began before D1 deletion and returns that old row afterward.
+    const result = await upgrade;
+    await finishing;
+    assert.equal(result.status, 401, 'a stale D1 row cannot acquire a usable socket');
+    assert.equal(context.sockets.length, 0, 'the late upgrade was never accepted');
+    assert.equal(finishedBeforeRead, false, 'logout keeps the revocation gate until in-flight upgrades settle');
+  } finally {
+    releaseRead(null);
+    globalThis.Response = NativeResponse;
+    globalThis.WebSocketPair = NativePair;
+  }
+});
+
+test('committed room deletion survives a DO notification failure and closes sockets on retry', async () => {
+  const room = await destroyFaultFixture({ rpcFailure: true });
+  const response = await room.destroy();
+  assert.equal(room.roomExists, false, 'D1 deletion committed');
+  assert.equal(response.status, 202, 'committed deletion reports pending finalization, not a retryable 500');
+  assert.ok(room.context.alarmAt, 'durable retry is armed before D1 deletion');
+  await room.durable.alarm();
+  assert.equal(room.socket.closed, true, 'retry closes the old socket');
+  assert.equal(room.socket.messages.at(-1)?.type, 'room.destroyed', 'retry notifies the old socket');
+});
+
+test('alarm and DELETE do not announce the same destruction twice', async () => {
+  const room = await destroyFaultFixture({ holdMediaDelete: true });
+  const deletion = room.destroy();
+  await room.mediaDeleteStarted;
+  const alarm = room.durable.alarm();
+  try {
+    await wait(25);
+    assert.equal(room.socket.messages.filter(({ type }) => type === 'room.destroyed').length, 1);
+  } finally {
+    room.releaseMediaDelete();
+    await Promise.all([deletion, alarm]);
+  }
+});
+
+test('R2 failure after committed room deletion is queued and retried', async () => {
+  const room = await destroyFaultFixture({ mediaFailure: true });
+  const response = await room.destroy();
+  const backgroundKey = `rooms/${room.roomId}/background`;
+  assert.equal(room.roomExists, false, 'D1 deletion committed');
+  assert.equal(response.status, 202, 'a failed R2 cleanup is explicitly pending');
+  assert.equal(room.mediaObjects.has(backgroundKey), true, 'first R2 delete failed');
+  assert.ok(room.context.alarmAt, 'durable retry remains armed');
+  await room.durable.alarm();
+  assert.equal(room.mediaObjects.has(backgroundKey), false, 'alarm retries the failed R2 object');
 });
