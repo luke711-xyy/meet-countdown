@@ -895,6 +895,25 @@ export class CoupleRoom extends DurableObject<Env> {
 
   private revocationKey(tokenHash: string) { return `session:revoking:${tokenHash}`; }
 
+  private async activeSocketSession(socket: WebSocket) {
+    const attachment = socket.deserializeAttachment() as { memberId?: string; authSessionHash?: string; authExpiresAt?: string; authRevoked?: boolean } | null;
+    if (!attachment?.memberId || !attachment.authSessionHash || attachment.authRevoked || this.revokingSessions.has(attachment.authSessionHash)) {
+      try { socket.close(1008, 'Session ended'); } catch { /* socket already closed */ }
+      return false;
+    }
+    const expiresAt = Date.parse(attachment.authExpiresAt || '');
+    if (Number.isFinite(expiresAt) && expiresAt > Date.now()) return true;
+    // /api/auth/me can refresh this same login, so revalidate at the old deadline.
+    const live = await this.env.DB.prepare('SELECT expires_at AS expiresAt FROM auth_sessions WHERE token_hash = ?1 AND user_id = ?2 AND expires_at > ?3')
+      .bind(attachment.authSessionHash, attachment.memberId, nowIso()).first<{ expiresAt: string }>();
+    if (!live || !Number.isFinite(Date.parse(live.expiresAt)) || Date.parse(live.expiresAt) <= Date.now() || this.revokingSessions.has(attachment.authSessionHash)) {
+      try { socket.close(1008, 'Session expired'); } catch { /* socket already closed */ }
+      return false;
+    }
+    socket.serializeAttachment({ ...attachment, authExpiresAt: live.expiresAt });
+    return true;
+  }
+
   async fetch(request: Request) {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
     const url = new URL(request.url);
@@ -913,15 +932,15 @@ export class CoupleRoom extends DurableObject<Env> {
         return new Response('Unauthorized', { status: 401 });
       }
       // A Worker request can pass its D1 check before logout and arrive here after revocation.
-      const liveSession = await this.env.DB.prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ?1 AND user_id = ?2 AND expires_at > ?3')
-        .bind(authSessionHash, memberId, nowIso()).first();
+      const liveSession = await this.env.DB.prepare('SELECT expires_at AS expiresAt FROM auth_sessions WHERE token_hash = ?1 AND user_id = ?2 AND expires_at > ?3')
+        .bind(authSessionHash, memberId, nowIso()).first<{ expiresAt: string }>();
       if (this.roomDestroying) return new Response('Room destroyed', { status: 410 });
-      if (!liveSession || this.revokingSessions.has(authSessionHash)) return new Response('Unauthorized', { status: 401 });
+      if (!liveSession || !Number.isFinite(Date.parse(liveSession.expiresAt)) || Date.parse(liveSession.expiresAt) <= Date.now() || this.revokingSessions.has(authSessionHash)) return new Response('Unauthorized', { status: 401 });
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
       this.ctx.acceptWebSocket(server);
-      server.serializeAttachment({ roomId, memberId, authSessionHash, socketId: crypto.randomUUID() });
+      server.serializeAttachment({ roomId, memberId, authSessionHash, authExpiresAt: liveSession.expiresAt, socketId: crypto.randomUUID() });
       server.send(JSON.stringify({ type: 'room.ready', payload: { roomId, memberId }, createdAt: nowIso() }));
       return new Response(null, { status: 101, webSocket: client });
     } finally {
@@ -934,6 +953,7 @@ export class CoupleRoom extends DurableObject<Env> {
   async broadcast(event: RoomEvent) {
     const message = JSON.stringify(event);
     for (const socket of this.ctx.getWebSockets()) {
+      if (!(await this.activeSocketSession(socket))) continue;
       try { socket.send(message); } catch { /* disconnected sockets are cleaned by the runtime */ }
       if (event.type === 'room.destroyed') {
         try { socket.close(1000, 'Room destroyed'); } catch { /* socket already closed */ }
@@ -960,12 +980,14 @@ export class CoupleRoom extends DurableObject<Env> {
     this.revokingSessions.delete(tokenHash);
   }
 
-  private screeningSockets(extraSocket?: WebSocket) {
+  private async screeningSockets(extraSocket?: WebSocket) {
     const sockets = [...this.ctx.getWebSockets()];
     if (extraSocket && !sockets.includes(extraSocket)) sockets.push(extraSocket);
     const byId = new Map<string, { socket: WebSocket; attachment: Record<string, unknown> }>();
     const peers: ScreeningPeer[] = [];
     for (const socket of sockets) {
+      // The closing socket still needs its attachment so leave can notify the peer.
+      if (socket !== extraSocket && !(await this.activeSocketSession(socket))) continue;
       const attachment = socket.deserializeAttachment() as Record<string, unknown> | null;
       if (!attachment || typeof attachment.memberId !== 'string' || !attachment.memberId) continue;
       const socketId = typeof attachment.socketId === 'string' && attachment.socketId ? attachment.socketId : crypto.randomUUID();
@@ -984,10 +1006,10 @@ export class CoupleRoom extends DurableObject<Env> {
       JSON.stringify({ type: event.type, payload: event.payload, createdAt: nowIso() }));
   }
 
-  private leaveScreening(socket: WebSocket) {
+  private async leaveScreening(socket: WebSocket) {
     if (this.disconnectedScreeningSockets.has(socket)) return;
     this.disconnectedScreeningSockets.add(socket);
-    const { peers, byId } = this.screeningSockets(socket);
+    const { peers, byId } = await this.screeningSockets(socket);
     const attachment = socket.deserializeAttachment() as ScreeningPeer | null;
     if (!attachment?.sessionId || !attachment.socketId) return;
     const result = transitionScreening(peers, attachment.socketId, {
@@ -998,14 +1020,10 @@ export class CoupleRoom extends DurableObject<Env> {
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
-    const attachment = socket.deserializeAttachment() as { authSessionHash?: string; authRevoked?: boolean } | null;
     // A deletion can still fail. Hold existing sockets open until success is committed
     // and room.destroyed is broadcast, rather than closing them during the gate.
     if (await this.isRoomDestroying()) return;
-    if (!attachment?.authSessionHash || attachment.authRevoked || this.revokingSessions.has(attachment.authSessionHash)) {
-      try { socket.close(1008, 'Session ended'); } catch { /* socket already closed */ }
-      return;
-    }
+    if (!(await this.activeSocketSession(socket))) return;
     if (typeof message !== 'string') return;
     if (shouldRejectOversizedRealtimeMessage(message)) return;
     try {
@@ -1013,7 +1031,7 @@ export class CoupleRoom extends DurableObject<Env> {
       if (typeof input?.type === 'string' && input.type.startsWith('screening.')) {
         const command = parseScreeningMessage(message);
         if (!command) return;
-        const { peers, byId } = this.screeningSockets(socket);
+        const { peers, byId } = await this.screeningSockets(socket);
         const attachment = socket.deserializeAttachment() as ScreeningPeer | null;
         if (!attachment?.socketId) return;
         this.applyScreening(transitionScreening(peers, attachment.socketId, command, Date.now(), () => crypto.randomUUID()), byId);
@@ -1036,6 +1054,7 @@ export class CoupleRoom extends DurableObject<Env> {
         });
         for (const peer of this.ctx.getWebSockets()) {
           if (peer !== socket) {
+            if (!(await this.activeSocketSession(peer))) continue;
             try { peer.send(event); } catch { /* disconnected sockets are cleaned by the runtime */ }
           }
         }
@@ -1050,6 +1069,7 @@ export class CoupleRoom extends DurableObject<Env> {
       const event = JSON.stringify({ type: 'pointer', payload: { x, y, strength: Math.min(1, Math.max(0, strength)) }, createdAt: nowIso() });
       for (const peer of this.ctx.getWebSockets()) {
         if (peer !== socket) {
+          if (!(await this.activeSocketSession(peer))) continue;
           try { peer.send(event); } catch { /* disconnected sockets are cleaned by the runtime */ }
         }
       }
@@ -1058,6 +1078,6 @@ export class CoupleRoom extends DurableObject<Env> {
     }
   }
 
-  async webSocketClose(socket: WebSocket) { if (!(await this.isRoomDestroying())) this.leaveScreening(socket); }
-  async webSocketError(socket: WebSocket) { if (!(await this.isRoomDestroying())) this.leaveScreening(socket); }
+  async webSocketClose(socket: WebSocket) { if (!(await this.isRoomDestroying())) await this.leaveScreening(socket); }
+  async webSocketError(socket: WebSocket) { if (!(await this.isRoomDestroying())) await this.leaveScreening(socket); }
 }

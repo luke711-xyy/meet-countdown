@@ -255,7 +255,6 @@ export function transitionScreening(
     peer.sharer = undefined;
     peer.paused = undefined;
     peer.pendingPause = undefined;
-    peer.lastDanmakuAt = undefined;
     peer.negotiationId = undefined;
     peer.usedNegotiationIds = undefined;
     peer.micEnabled = undefined;
@@ -264,6 +263,10 @@ export function transitionScreening(
 
   if (command.type === 'screening.join') {
     if (actor.sessionId) return result;
+    // Keep the short rate window when a member leaves and returns on another device.
+    const memberDanmakuTimes = next.filter((peer) => peer.memberId === actor.memberId)
+      .map((peer) => peer.lastDanmakuAt).filter((time): time is number => typeof time === 'number');
+    if (memberDanmakuTimes.length) actor.lastDanmakuAt = Math.max(...memberDanmakuTimes);
     const members = new Set(active().map((peer) => peer.memberId));
     if (members.size >= 2 && !members.has(actor.memberId)) return result;
     const prior = active().find((peer) => peer.memberId === actor.memberId);

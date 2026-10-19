@@ -77,7 +77,7 @@ class FakePeer {
 }
 
 function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height: 1080 })], displayError, signalError = false,
-  peerClass = FakePeer, onShareChangeOverride, sendSignalOverride } = {}) {
+  peerClass = FakePeer, onShareChangeOverride, onMicChangeOverride, sendSignalOverride } = {}) {
   FakePeer.instances = [];
   const shareChanges = [];
   const micChanges = [];
@@ -105,7 +105,7 @@ function harness({ screenTracks = [new FakeTrack('video', { width: 1920, height:
     mediaDevices, PeerConnection: peerClass,
     sendSignal: (signal) => { if (rejectSignals) throw new Error('peer not joined'); signals.push(signal); return sendSignalOverride?.(signal); },
     onShareChange: (value) => { shareChanges.push(value); return onShareChangeOverride?.(value); },
-    onMicChange: (value) => micChanges.push(value),
+    onMicChange: (value) => { micChanges.push(value); return onMicChangeOverride?.(value); },
     onStatus: (value) => statuses.push(value),
     onQuality: (value) => qualities.push(value),
     onRemoteStream: (value) => remoteStreams.push(value),
@@ -356,6 +356,72 @@ test('concurrent mic grants do not leak captured tracks', async () => {
   ctx.session.close();
   assert.equal(ctx.userCalls, 1);
   assert.equal(ctx.micTrack.stopCalls, 1);
+});
+
+test('failed peer setup stops a newly captured mic and leaves it disabled', async () => {
+  class RejectingPeer extends FakePeer {
+    addTrack(track, source) {
+      if (track.kind === 'audio') throw new Error('addTrack failed');
+      return super.addTrack(track, source);
+    }
+  }
+  const ctx = harness({ peerClass: RejectingPeer });
+  try {
+    await ctx.session.startSharing();
+    await assert.rejects(ctx.session.enableMic(), /addTrack failed/);
+    assert.equal(ctx.micTrack.stopCalls, 1);
+    assert.equal(ctx.session.setMicEnabled(false), false);
+    assert.equal(ctx.micChanges.at(-1), false);
+    assert.equal(ctx.peer.senders.some((sender) => sender.track === ctx.micTrack), false);
+  } finally { ctx.session.close(); }
+  assert.equal(ctx.micTrack.stopCalls, 1);
+});
+
+test('mic cleanup survives a peer removeTrack error after callback rejection', async () => {
+  class RejectingRemovalPeer extends FakePeer {
+    removeTrack() { throw new Error('removeTrack failed'); }
+  }
+  const ctx = harness({ peerClass: RejectingRemovalPeer, onMicChangeOverride(enabled) {
+    if (enabled) throw new Error('mic status rejected');
+  } });
+  try {
+    await ctx.session.startSharing();
+    await assert.rejects(ctx.session.enableMic(), /mic status rejected/);
+    assert.equal(ctx.micTrack.stopCalls, 1);
+    assert.equal(ctx.session.setMicEnabled(false), false);
+    assert.deepEqual(ctx.micChanges, [true, false]);
+  } finally { ctx.session.close(); }
+});
+
+test('stopping a share releases the mic and reports it disabled', async () => {
+  const ctx = harness();
+  await ctx.session.startSharing();
+  await ctx.session.enableMic();
+  const oldPeer = ctx.peer;
+  ctx.session.stopSharing();
+  assert.equal(ctx.micTrack.stopCalls, 1);
+  assert.equal(ctx.micTrack.enabled, false);
+  assert.deepEqual(ctx.micChanges, [true, false]);
+  assert.equal(ctx.session.setMicEnabled(false), false);
+  assert.equal(oldPeer.closed, true);
+  ctx.session.close();
+  assert.equal(ctx.micTrack.stopCalls, 1);
+});
+
+test('sender quality respects 720p, 1080p and larger capture dimensions', async () => {
+  for (const [width, height, tier, bitrate, scale] of [
+    [1280, 720, '720p', 2_500_000, 1],
+    [1920, 1080, '1080p', 6_000_000, 1],
+    [2560, 1440, '1080p', 6_000_000, 4 / 3],
+  ]) {
+    const ctx = harness({ screenTracks: [new FakeTrack('video', { width, height })] });
+    try {
+      await ctx.session.startSharing();
+      const sender = ctx.peer.senders.find((item) => item.track.kind === 'video');
+      assert.equal(sender.parameters.encodings[0].maxBitrate, bitrate, `${width}x${height} bitrate`);
+      assert.equal(sender.parameters.encodings[0].scaleResolutionDownBy, scale, `${width}x${height} scale`);
+    } finally { ctx.session.close(); }
+  }
 });
 
 test('stale signal is ignored', async () => {
@@ -609,7 +675,7 @@ test('sustained loss degrades video first', async () => {
     assert.equal(ctx.qualities.at(-1).tier, '720p');
     const videoSender = ctx.peer.senders.find((item) => item.track.kind === 'video');
     const audioSender = ctx.peer.senders.find((item) => item.track.kind === 'audio');
-    assert.ok(videoSender.parameters.encodings[0].maxBitrate <= 1_500_000);
+    assert.equal(videoSender.parameters.encodings[0].maxBitrate, 2_500_000);
     assert.equal(audioSender, undefined);
     ctx.session.close();
   } finally {

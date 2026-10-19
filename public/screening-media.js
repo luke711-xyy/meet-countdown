@@ -48,6 +48,7 @@ export function createScreeningMedia({
   let micTrack = null;
   let micRequest = null;
   let micSender = null;
+  let micGeneration = 0;
   let remoteStream = null;
   let screenSenders = [];
   let negotiationId = null;
@@ -64,6 +65,7 @@ export function createScreeningMedia({
   let viewerRecoveryPending = false;
   let failureReported = false;
   let qualityTier = '1080p';
+  let maxQualityTier = '1080p';
   let badSamples = 0;
   let goodSamples = 0;
   const ownedTracks = new Set();
@@ -81,6 +83,30 @@ export function createScreeningMedia({
 
   function stopStream(stream) {
     for (const track of stream?.getTracks() || []) stopTrack(track);
+  }
+
+  function stopMic() {
+    micGeneration++;
+    micRequest = null;
+    const hadMic = Boolean(micStream || micTrack);
+    if (micStream) {
+      for (const track of micStream.getTracks()) {
+        track.onended = null;
+        track.enabled = false;
+        stopTrack(track);
+      }
+    }
+    if (peer && micSender) {
+      try { peer.removeTrack(micSender); }
+      catch { /* Closing or replacing the peer still releases the owned track. */ }
+    }
+    micStream = null;
+    micTrack = null;
+    micSender = null;
+    if (hadMic) {
+      try { Promise.resolve(onMicChange(false)).catch(() => report('signaling-error')); }
+      catch { report('signaling-error'); }
+    }
   }
 
   function clearDisconnectTimer() {
@@ -124,6 +150,7 @@ export function createScreeningMedia({
     badSamples = 0;
     goodSamples = 0;
     qualityTier = '1080p';
+    maxQualityTier = '1080p';
     if (!closed) onRemoteStream(null);
   }
 
@@ -279,14 +306,17 @@ export function createScreeningMedia({
     const sender = screenSenders.find((item) => item.track === screenVideo);
     if (!sender) return false;
     const settings = screenVideo.getSettings?.() || {};
-    const scale = tier === '720p' ? Math.max(1, (settings.width || 1280) / 1280, (settings.height || 720) / 720) : 1;
+    const selectedTier = tier === '1080p' && maxQualityTier === '720p' ? '720p' : tier;
+    const scale = selectedTier === '720p'
+      ? Math.max(1, (settings.width || 1280) / 1280, (settings.height || 720) / 720)
+      : Math.max(1, (settings.width || 1920) / 1920, (settings.height || 1080) / 1080);
     try {
       const parameters = sender.getParameters();
       if (!parameters.encodings?.length) parameters.encodings = [{}];
-      parameters.encodings[0].maxBitrate = tier === '720p' ? 1_200_000 : 2_500_000;
+      parameters.encodings[0].maxBitrate = selectedTier === '720p' ? 2_500_000 : 6_000_000;
       parameters.encodings[0].scaleResolutionDownBy = scale;
       await sender.setParameters(parameters);
-      qualityTier = tier;
+      qualityTier = selectedTier;
       return true;
     } catch {
       report('quality-limited');
@@ -341,7 +371,7 @@ export function createScreeningMedia({
       if (qualityTier === '1080p' && badSamples >= 2) {
         await setVideoTier('720p');
         badSamples = 0;
-      } else if (qualityTier === '720p' && goodSamples >= 4) {
+      } else if (qualityTier === '720p' && maxQualityTier === '1080p' && goodSamples >= 4) {
         await setVideoTier('1080p');
         goodSamples = 0;
       }
@@ -386,6 +416,8 @@ export function createScreeningMedia({
     try {
       if (!hasSourceAudio) report('no-source-audio', 'No film audio is being shared.');
       if (peer && !screenSenders.length) releasePeer();
+      const settings = video.getSettings?.() || {};
+      maxQualityTier = settings.width > 0 && settings.height > 0 && settings.width <= 1280 && settings.height <= 720 ? '720p' : '1080p';
       ensurePeer();
       shareAnnounced = true;
       await Promise.resolve(onShareChange({ active: true, hasSourceAudio }));
@@ -419,6 +451,7 @@ export function createScreeningMedia({
       track.onended = null;
       stopTrack(track);
     }
+    stopMic();
     releasePeer();
     if (shareAnnounced && !closed) onShareChange({ active: false, hasSourceAudio: false });
     shareAnnounced = false;
@@ -429,33 +462,37 @@ export function createScreeningMedia({
     if (micTrack && micTrack.readyState !== 'ended') return Promise.resolve(setMicEnabled(true));
     if (micRequest) return micRequest;
     if (!mediaDevices?.getUserMedia) return Promise.reject(new Error('Microphone capture is unavailable'));
+    const generation = ++micGeneration;
     const request = (async () => {
       const captured = await mediaDevices.getUserMedia(MIC_CONSTRAINTS);
       for (const track of captured.getTracks()) ownedTracks.add(track);
-      if (closed) {
+      if (closed || generation !== micGeneration) {
         stopStream(captured);
-        throw new Error('Media session is closed');
+        throw new Error('Microphone capture was cancelled');
       }
       const audio = captured.getAudioTracks()[0];
       if (!audio) {
         stopStream(captured);
         throw new Error('Microphone capture returned no audio');
       }
-      micStream = captured;
-      micTrack = audio;
-      micTrack.enabled = true;
-      micTrack.onended = () => {
-        if (!closed && micTrack === audio) {
-          micTrack = null;
-          micSender = null;
-          onMicChange(false);
-        }
-      };
-      if (peer) micSender = peer.addTrack(micTrack, micStream);
-      await Promise.resolve(onMicChange(true));
-      if (screenStream && peer) await sendOffer();
-      else if (peer) report('needs-sharer-renegotiation', 'Ask the sharer to reconnect.');
-      return true;
+      try {
+        micStream = captured;
+        micTrack = audio;
+        micTrack.enabled = true;
+        micTrack.onended = () => {
+          if (!closed && micTrack === audio) stopMic();
+        };
+        if (peer) micSender = peer.addTrack(micTrack, micStream);
+        await Promise.resolve(onMicChange(true));
+        if (closed || generation !== micGeneration) throw new Error('Microphone capture was cancelled');
+        if (screenStream && peer) await sendOffer();
+        else if (peer) report('needs-sharer-renegotiation', 'Ask the sharer to reconnect.');
+        return true;
+      } catch (error) {
+        if (micStream === captured) stopMic();
+        else stopStream(captured);
+        throw error;
+      }
     })();
     micRequest = request;
     request.then(() => { if (micRequest === request) micRequest = null; }, () => { if (micRequest === request) micRequest = null; });
@@ -547,15 +584,7 @@ export function createScreeningMedia({
       if (shareAnnounced) onShareChange({ active: false, hasSourceAudio: false });
       shareAnnounced = false;
     }
-    if (micStream) {
-      for (const track of micStream.getTracks()) {
-        track.onended = null;
-        stopTrack(track);
-      }
-      micStream = null;
-      if (micTrack?.enabled) onMicChange(false);
-      micTrack = null;
-    }
+    stopMic();
     for (const track of ownedTracks) stopTrack(track);
     releasePeer();
     ownedTracks.clear();

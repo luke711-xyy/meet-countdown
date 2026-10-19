@@ -306,6 +306,18 @@ test('rate-limits short danmaku', () => {
   assert.equal(allowed.events.some((event) => event.type === 'screening.danmaku'), true);
 });
 
+test('danmaku rate window survives leave and rejoin by the same member', () => {
+  let peers = joined(sockets(), 'a1', 'alice-phone');
+  peers = joined(peers, 'b1', 'bob-tablet');
+  peers = command(peers, 'a1', 'screening.danmaku', 1, { text: 'first' }, 1000).peers;
+  peers = command(peers, 'a1', 'screening.leave', 2, {}, 1001).peers;
+  peers = joined(peers, 'a2', 'alice-laptop');
+  const tooSoon = command(peers, 'a2', 'screening.danmaku', 1, { text: 'too soon' }, 1002);
+  assert.equal(tooSoon.events.some((event) => event.type === 'screening.danmaku'), false);
+  const allowed = command(tooSoon.peers, 'a2', 'screening.danmaku', 2, { text: 'allowed' }, 2000);
+  assert.equal(allowed.events.some((event) => event.type === 'screening.danmaku'), true);
+});
+
 test('requires sharer pause confirmation', () => {
   let peers = joined(sockets(), 'a1', 'alice-phone');
   peers = joined(peers, 'b1', 'bob-tablet');

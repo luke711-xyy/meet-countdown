@@ -387,6 +387,8 @@ async function destroyFaultFixture({ rpcFailure = false, mediaFailure = false, h
   const mediaDeleteGate = new Promise((resolve) => { releaseMediaDelete = resolve; });
   const context = faultContext();
   const socket = faultSocket();
+  socket.serializeAttachment({ roomId, memberId, authSessionHash: tokenHash,
+    authExpiresAt: new Date(Date.now() + 60_000).toISOString(), socketId: randomUUID() });
   context.sockets.push(socket);
   const env = {
     DB: {
@@ -490,6 +492,48 @@ test('logout waits for a pre-deletion D1 upgrade read before clearing revocation
     assert.equal(finishedBeforeRead, false, 'logout keeps the revocation gate until in-flight upgrades settle');
   } finally {
     releaseRead(null);
+    globalThis.Response = NativeResponse;
+    globalThis.WebSocketPair = NativePair;
+  }
+});
+
+test('an accepted socket stops handling commands after its login session expires', async () => {
+  const { CoupleRoom } = await loadWorkerForFaultTests();
+  const context = faultContext();
+  const expiresAtMs = Date.now() + 60_000;
+  const tokenHash = createHash('sha256').update('expiring-session').digest('base64url');
+  const env = { DB: { prepare: () => ({ bind: () => ({ first: async () => ({ expiresAt: new Date(expiresAtMs).toISOString() }) }) }) } };
+  const durable = new CoupleRoom(context, env);
+  const NativeResponse = globalThis.Response;
+  const NativePair = globalThis.WebSocketPair;
+  const nativeNow = Date.now;
+  globalThis.Response = class extends NativeResponse {
+    constructor(body, init) { if (init?.status === 101) return { status: 101, webSocket: init.webSocket }; super(body, init); }
+  };
+  globalThis.WebSocketPair = class { constructor() { this[0] = faultSocket(); this[1] = faultSocket(); } };
+  try {
+    const accepted = await durable.fetch(new Request('http://localhost/ws?room=room_abcdefghij', {
+      headers: { Upgrade: 'websocket', 'X-Member-Id': 'user_example', 'X-Auth-Session-Hash': tokenHash },
+    }));
+    assert.equal(accepted.status, 101);
+    const server = context.sockets[0];
+    assert.equal(server.closed, false);
+    await durable.webSocketMessage(server, packet('screening.join', { deviceId: 'first-device', takeover: false }));
+    const viewer = faultSocket();
+    viewer.serializeAttachment({ roomId: 'room_abcdefghij', memberId: 'viewer', authSessionHash: createHash('sha256').update('viewer-session').digest('base64url'),
+      authExpiresAt: new Date(expiresAtMs + 120_000).toISOString(), socketId: randomUUID() });
+    context.sockets.push(viewer);
+    await durable.webSocketMessage(viewer, packet('screening.join', { deviceId: 'viewer-device', takeover: false }));
+    Date.now = () => expiresAtMs + 1;
+    await durable.webSocketMessage(server, packet('screening.join', { deviceId: 'expired-device', takeover: false }));
+    assert.equal(server.closed, true, 'the expired socket is closed before dispatch');
+    assert.equal(server.messages.filter(({ type }) => type === 'screening.joined').length, 1, 'expired command was not dispatched');
+    await durable.webSocketClose(server);
+    assert.equal(viewer.messages.some(({ type }) => type === 'screening.peer.left'), true, 'expiry releases the old screening device');
+    await durable.broadcast({ type: 'settings.updated', payload: {}, createdAt: new Date().toISOString() });
+    assert.equal(server.messages.some(({ type }) => type === 'settings.updated'), false, 'expired sockets cannot receive later room events');
+  } finally {
+    Date.now = nativeNow;
     globalThis.Response = NativeResponse;
     globalThis.WebSocketPair = NativePair;
   }

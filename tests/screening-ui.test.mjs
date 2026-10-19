@@ -5,6 +5,22 @@ import { JSDOM } from 'jsdom';
 import { createScreeningRoom } from '../public/screening-room.js';
 
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const css = readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+
+test('screening shell uses available width while video keeps its full uncropped frame', () => {
+  for (const width of [390, 1440, 2560]) {
+    const dom = new JSDOM(html, { url: 'https://example.test/' });
+    dom.window.innerWidth = width;
+    const style = dom.window.document.createElement('style');
+    style.textContent = css;
+    dom.window.document.head.append(style);
+    const shell = dom.window.getComputedStyle(dom.window.document.querySelector('.screening-shell'));
+    const video = dom.window.getComputedStyle(dom.window.document.querySelector('#screening-video'));
+    assert.equal(shell.width, '100%', `${width}px viewport must not cap the screening shell`);
+    assert.equal(video.objectFit, 'contain', `${width}px viewport must not crop the picture`);
+    dom.window.close();
+  }
+});
 
 function setup({ capture = true, sendResponse = () => true } = {}) {
   const dom = new JSDOM(html, { url: 'https://example.test/?room=r1' });
@@ -68,6 +84,17 @@ test('unsupported capture leaves viewer controls usable', async () => {
   assert.equal(shareButton.disabled, true);
   assert.equal(micButton.disabled, false);
   assert.equal(document.querySelector('#screening-danmaku-input').disabled, false);
+});
+
+test('mic control returns to off when media reports sharing cleanup', async () => {
+  const room = setup();
+  await room.controller.open(); room.joined();
+  const button = room.document.querySelector('#screening-mic');
+  await room.media[0].callbacks.onMicChange(true);
+  assert.equal(button.getAttribute('aria-pressed'), 'true');
+  await room.media[0].callbacks.onMicChange(false);
+  assert.equal(button.getAttribute('aria-pressed'), 'false');
+  assert.equal(button.getAttribute('aria-label'), '开启麦克风');
 });
 
 test('missing source audio is explicit', async () => {

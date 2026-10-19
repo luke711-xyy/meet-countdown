@@ -12,7 +12,7 @@ const waterSource = readFileSync(new URL('../public/water-background.js', import
   .replace("'/vendor/three.module.js'", JSON.stringify(new URL('../public/vendor/three.module.js', import.meta.url).href));
 const { WaterBackground: RealWaterBackground } = await import(`data:text/javascript,${encodeURIComponent(waterSource)}`);
 
-async function setup() {
+async function setup({ fetchOverride, startMs = Date.now() } = {}) {
   const dom = new JSDOM(html, { url: 'https://example.test/?room=r1' });
   const { document } = dom.window;
   Object.defineProperty(dom.window.navigator, 'mediaDevices', { value: { getDisplayMedia() {} } });
@@ -40,10 +40,12 @@ async function setup() {
     media.push(instance);
     return instance;
   };
-  const response = (body) => ({ ok: true, headers: { get: () => 'application/json' }, json: async () => body });
+  const response = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => 'application/json' }, json: async () => body });
   const roomState = { targetAt: '2030-01-01T00:00:00.000Z', timeZone: 'UTC', members: [{ id: 'm1', username: 'Me', slot: 1 }], tasks: [], voiceNotes: [], doodles: [] };
-  const fetch = async (url) => {
+  const fetch = async (url, options = {}) => {
     const path = new URL(url, 'https://example.test').pathname;
+    const overridden = await fetchOverride?.(path, response, options);
+    if (overridden) return overridden;
     if (path === '/api/auth/me') return response({ user: { id: 'm1', username: 'Me' } });
     if (path === '/api/room') return response({ roomId: 'r1', memberId: 'm1' });
     if (path === '/api/state') return response({ ...roomState });
@@ -51,16 +53,23 @@ async function setup() {
     throw new Error(`unexpected fetch: ${path}`);
   };
   const scheduled = [];
+  const intervals = [];
+  const clock = { now: startMs, advance(ms) { this.now += ms; } };
+  const RealDate = Date;
+  class ClockDate extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [clock.now])); }
+    static now() { return clock.now; }
+  }
   dom.window.setTimeout = (fn, delay) => { scheduled.push({ fn, delay }); return scheduled.length; };
   dom.window.clearTimeout = () => {};
   const location = { protocol: 'https:', host: 'example.test', origin: 'https://example.test', search: '?room=r1', href: 'https://example.test/?room=r1' };
   const history = { replaceState(_state, _title, href) { location.href = href; location.search = new URL(href, location.origin).search; } };
-  const run = new AsyncFunction('WaterBackground', 'DoodleCanvas', 'createScreeningRoom', 'initHtmlCanvasBridge', 'document', 'window', 'navigator', 'location', 'history', 'fetch', 'WebSocket', 'setInterval', 'setTimeout', 'requestAnimationFrame', 'performance', appSource);
+  const run = new AsyncFunction('WaterBackground', 'DoodleCanvas', 'createScreeningRoom', 'initHtmlCanvasBridge', 'document', 'window', 'navigator', 'location', 'history', 'fetch', 'WebSocket', 'setInterval', 'setTimeout', 'requestAnimationFrame', 'performance', 'Date', appSource);
   await run(WaterBackground, DoodleCanvas, (args) => createScreeningRoom({ ...args, createMedia: mediaFactory }), async () => {}, document, dom.window, dom.window.navigator,
-    location, history, fetch, Socket, () => 0, () => 0, () => 0, { now: () => 1000 });
+    location, history, fetch, Socket, (fn, delay) => { intervals.push({ fn, delay }); return intervals.length; }, () => 0, () => 0, { now: () => 1000 }, ClockDate);
   const socket = Socket.instances[0];
   socket.open();
-  return { dom, document, water, doodle, media, commands, Socket, socket, scheduled };
+  return { dom, document, water, doodle, media, commands, Socket, socket, scheduled, intervals, clock, location };
 }
 
 test('opening suspends background and drawing', async () => {
@@ -79,7 +88,7 @@ test('opening suspends background and drawing', async () => {
 });
 
 test('exit restores countdown', async () => {
-  const app = await setup();
+  const app = await setup({ startMs: Date.parse('2029-12-31T23:59:50.000Z') });
   app.document.querySelector('#open-screening').click();
   assert.equal(app.document.body.classList.contains('is-screening'), true);
   app.document.querySelector('#screening-close').click();
@@ -88,8 +97,47 @@ test('exit restores countdown', async () => {
   assert.deepEqual(app.water.suspensions, [true, false]);
   assert.equal(app.document.querySelector('#screening-room').hidden, true);
   assert.match(app.document.querySelector('#days').textContent, /^\d+$/);
+  const before = app.document.querySelector('#seconds').textContent;
+  app.clock.advance(2000);
+  app.intervals.find(({ delay }) => delay === 250).fn();
+  assert.equal(before, '10');
+  assert.equal(app.document.querySelector('#seconds').textContent, '08');
   app.dom.window.dispatchEvent(new app.dom.window.MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0 }));
   assert.equal(app.doodle.draws, 1);
+});
+
+test('failed logout leaves the authenticated room usable and can be retried', async () => {
+  let attempts = 0;
+  const app = await setup({ fetchOverride(path, response) {
+    if (path !== '/api/auth/logout') return null;
+    return ++attempts === 1 ? response({ error: '暂时无法退出' }, 503) : response({});
+  } });
+  app.document.querySelector('#open-screening').click();
+  app.document.querySelector('#logout-button').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.socket.readyState, app.Socket.OPEN);
+  assert.equal(app.document.body.classList.contains('is-screening'), true);
+  assert.equal(app.location.href, 'https://example.test/?room=r1');
+  assert.match(app.document.querySelector('#toast').textContent, /暂时无法退出|重试/);
+  app.document.querySelector('#logout-button').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.socket.readyState, 3);
+  assert.equal(app.location.href, '/');
+});
+
+test('room deletion distinguishes queued media cleanup from completed cleanup', async () => {
+  for (const [status, body, expected] of [
+    [202, { ok: true, cleanupPending: true }, /清理.*重试/],
+    [200, { ok: true }, /房间已销毁/],
+  ]) {
+    const app = await setup({ fetchOverride: (path, response, options) => path === '/api/room' && options.method === 'DELETE' ? response(body, status) : null });
+    let confirmation = '';
+    app.dom.window.confirm = (message) => { confirmation = message; return true; };
+    app.document.querySelector('#destroy-room').click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(confirmation, /稍后|重试|完成/);
+    assert.match(app.document.querySelector('#room-gate-message').textContent, expected);
+  }
 });
 
 test('room teardown is idempotent', async () => {

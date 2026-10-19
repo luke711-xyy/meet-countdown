@@ -755,16 +755,30 @@ async function submitAuth(event) {
 }
 
 async function destroyCurrentRoom() {
-  if (!roomId || !window.confirm('退出后，这个房间和其中的任务、录音会立即销毁，另一方也会被通知。继续吗？')) return;
+  if (!roomId || !window.confirm('退出后，房间和任务会删除，另一方也会收到通知；录音和背景文件清理可能稍后完成。继续吗？')) return;
   elements.destroyRoom.disabled = true;
   try {
-    await api('/api/room', { method: 'DELETE' }); clearDoodleHistory(); teardownRoom(); history.replaceState(null, '', '/'); showRoomGate('房间已销毁，可以创建一个新的房间。'); hideSettings();
+    const result = await api('/api/room', { method: 'DELETE' });
+    clearDoodleHistory(); teardownRoom(); history.replaceState(null, '', '/');
+    showRoomGate(result?.cleanupPending
+      ? '房间已退出；录音和背景文件清理正在后台重试。可以创建一个新的房间。'
+      : '房间已销毁，可以创建一个新的房间。');
+    hideSettings();
   } catch (error) { showToast(error.message); } finally { elements.destroyRoom.disabled = false; }
 }
 
 async function logout() {
-  teardownRoom();
-  await fetch('/api/auth/logout', { method: 'POST' }); clearDoodleHistory(); currentUser = null; memberId = null; location.href = '/';
+  elements.logoutButton.disabled = true;
+  try {
+    const response = await fetch('/api/auth/logout', { method: 'POST' });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || '请求失败');
+    }
+    teardownRoom(); clearDoodleHistory(); currentUser = null; memberId = null; location.href = '/';
+  } catch (error) {
+    showToast(`退出登录失败：${error.message}，请重试`);
+  } finally { elements.logoutButton.disabled = false; }
 }
 
 elements.blurRange.addEventListener('input', () => { elements.blurOutput.textContent = `${elements.blurRange.value} px`; elements.background.style.setProperty('--background-blur', `${elements.blurRange.value}px`); water.setBlur(Number(elements.blurRange.value)); });
