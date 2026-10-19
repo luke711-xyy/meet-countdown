@@ -89,6 +89,7 @@
       <div class="screening-shell">
         <header class="screening-heading">
           <div><h2 id="screening-title">放映室</h2><p id="screening-person" class="screening-person"></p></div>
+          <p class="screening-audio-indicator" id="screening-audio-indicator" role="status" aria-live="polite" hidden>未共享影片声音</p>
         </header>
         <div class="screening-stage" id="screening-stage">
           <video id="screening-video" autoplay playsinline aria-label="对方共享的画面" hidden></video>
@@ -99,7 +100,8 @@
         <div class="screening-bottom">
           <div class="screening-notices">
             <p class="screening-status" id="screening-status" role="status" aria-live="polite">等待加入放映室</p>
-            <p class="screening-audio-indicator" id="screening-audio-indicator" role="status" aria-live="polite" hidden>未共享影片声音</p>
+          </div>
+          <div class="screening-actions">
             <button class="screening-takeover" id="screening-takeover" type="button" hidden>在此设备接管</button>
             <div class="screening-confirm-row" id="screening-confirm-row" hidden><span id="screening-confirm-text">请在播放器中暂停</span><button type="button" id="screening-confirm">已暂停</button></div>
           </div>

@@ -44,15 +44,22 @@ test('screening notices can scroll above controls in a short viewport', () => {
   const dom = new JSDOM(html, { url: 'https://example.test/' });
   const { document } = dom.window;
   const notices = document.querySelector('.screening-notices');
+  const actions = document.querySelector('.screening-actions');
+  const heading = document.querySelector('.screening-heading');
   assert.ok(notices);
-  for (const id of ['screening-status', 'screening-audio-indicator', 'screening-takeover', 'screening-confirm-row']) {
-    assert.equal(notices.contains(document.getElementById(id)), true);
+  assert.ok(actions);
+  assert.equal(notices.contains(document.getElementById('screening-status')), true);
+  assert.equal(heading.contains(document.getElementById('screening-audio-indicator')), true);
+  for (const id of ['screening-takeover', 'screening-confirm-row']) {
+    assert.equal(actions.contains(document.getElementById(id)), true);
+    assert.equal(notices.contains(document.getElementById(id)), false);
   }
   assert.equal(notices.contains(document.querySelector('.screening-controls')), false);
   const style = document.createElement('style');
   style.textContent = css;
   document.head.append(style);
   assert.equal(dom.window.getComputedStyle(notices).overflowY, 'auto');
+  assert.equal(dom.window.getComputedStyle(actions).flex, '0 0 auto');
   assert.match(css, /@media \(max-height: 420px\)[\s\S]*?\.screening-bottom\s*\{[^}]*max-height:\s*calc\(100% - 56px\);/);
   dom.window.close();
 });
