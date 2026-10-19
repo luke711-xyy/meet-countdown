@@ -22,6 +22,34 @@ test('screening shell uses available width while video keeps its full uncropped 
   }
 });
 
+test('screening stage fills the shell beneath overlaid heading and controls', () => {
+  const dom = new JSDOM(html, { url: 'https://example.test/' });
+  const style = dom.window.document.createElement('style');
+  style.textContent = css;
+  dom.window.document.head.append(style);
+  const computed = (selector) => dom.window.getComputedStyle(dom.window.document.querySelector(selector));
+  assert.equal(computed('.screening-shell').position, 'relative');
+  assert.equal(computed('.screening-stage').width, '100%');
+  assert.equal(computed('.screening-stage').height, '100%');
+  assert.equal(computed('.screening-heading').position, 'absolute');
+  assert.equal(computed('.screening-bottom').position, 'absolute');
+  assert.equal(computed('#screening-video').objectFit, 'contain');
+  assert.equal(computed('.screening-audio-action').top, '50%', 'autoplay unlock must stay clear of the bottom overlay');
+  dom.window.document.querySelector('#screening-room').classList.add('is-idle');
+  assert.equal(computed('.screening-controls').opacity, '0');
+  dom.window.close();
+});
+
+test('narrow screening controls retain DOM tab order in two rows with touch-sized targets', () => {
+  const controls = new JSDOM(html).window.document.querySelector('.screening-controls');
+  assert.deepEqual([...controls.querySelectorAll('button, input')].map((node) => node.id || node.getAttribute('aria-label')),
+    ['screening-mic', 'screening-danmaku-input', '发送弹幕', 'screening-pause', 'screening-share', 'screening-close']);
+  assert.match(css, /@media \(max-width: 430px\)[\s\S]*?\.screening-message\s*\{[^}]*grid-column:\s*2\s*\/\s*4;/);
+  assert.match(css, /@media \(max-width: 430px\)[\s\S]*?#screening-pause\s*\{[^}]*grid-column:\s*1;/);
+  assert.match(css, /@media \(max-width: 430px\)[\s\S]*?\.screening-orb\s*\{[^}]*min-width:\s*44px;/);
+  assert.match(css, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.screening-room\.is-idle[^}]*\.screening-controls\s*\{[^}]*opacity:\s*1;/);
+});
+
 function setup({ capture = true, sendResponse = () => true } = {}) {
   const dom = new JSDOM(html, { url: 'https://example.test/?room=r1' });
   const { document } = dom.window;
@@ -74,6 +102,29 @@ test('entry and glass controls remain accessible', async () => {
   assert.equal(root.hidden, true);
   assert.equal(document.activeElement, trigger);
   assert.equal(sent.at(-1).type, 'screening.leave');
+});
+
+test('desktop controls wake after idle on keyboard focus or pointer movement', async () => {
+  const room = setup();
+  const win = room.document.defaultView;
+  const originalSetTimeout = win.setTimeout.bind(win);
+  let idleCallback;
+  win.setTimeout = (callback, delay, ...args) => {
+    if (delay === 5000) { idleCallback = callback; return 321; }
+    return originalSetTimeout(callback, delay, ...args);
+  };
+  await room.controller.open(); room.joined();
+  assert.equal(typeof idleCallback, 'function');
+  idleCallback();
+  assert.equal(room.root.classList.contains('is-idle'), true);
+  room.document.querySelector('#screening-mic').focus();
+  assert.equal(room.root.classList.contains('is-idle'), false);
+  idleCallback();
+  assert.equal(room.root.classList.contains('is-idle'), true);
+  room.root.dispatchEvent(new win.Event('pointermove', { bubbles: true }));
+  assert.equal(room.root.classList.contains('is-idle'), false);
+  room.controller.close();
+  room.dom.window.close();
 });
 
 test('unsupported capture leaves viewer controls usable', async () => {
